@@ -32,13 +32,14 @@ class single_terrain:
         goals = np.zeros((num_goals, 2))
         pit_depth_val = np.random.uniform(pit_depth[0], pit_depth[1])
         pit_depth_grid = -round(pit_depth_val / terrain.vertical_scale)
-        terrain.height_field_raw[:] = pit_depth_grid
         
         h_scale = terrain.horizontal_scale
         v_scale = terrain.vertical_scale
     
         length_y_grid = round(length_y / h_scale)
         mid_y = length_y_grid // 2
+
+        length_x_grid = round(length_x / h_scale)
         
         stone_len = round(((stone_len_range[0] - stone_len_range[1]) * difficulty + stone_len_range[1]) / h_scale)
         stone_width = round(((stone_width_range[0] - stone_width_range[1]) * difficulty + stone_width_range[1]) / h_scale)
@@ -48,9 +49,9 @@ class single_terrain:
         platform_size_grid = int(round(platform_size / h_scale))
         incline_height_grid = int(round(incline_height / v_scale))
         
-        terrain.height_field_raw[start_x:start_x+platform_size_grid, start_y:start_y+length_y_grid] = 0
+        terrain.height_field_raw[start_x+platform_size_grid:start_x + length_x_grid, start_y:start_y+length_y_grid*2] = pit_depth_grid
         
-        dis_x = platform_size_grid - gap_x + stone_len // 2
+        dis_x = start_x +platform_size_grid - gap_x + stone_len // 2
         goals[0] = [start_x + platform_size_grid - stone_len // 2, start_y + mid_y]
         left_right_flag = np.random.randint(0, 2)
         
@@ -59,7 +60,7 @@ class single_terrain:
             pos_neg = 2 * (left_right_flag - 0.5)  # 1 或 -1
             dis_y = mid_y + pos_neg * gap_y
             
-            x_start = start_x + int(dis_x - stone_len // 2)
+            x_start = int(dis_x - stone_len // 2)
             x_end = x_start + stone_len
             y_start = int(dis_y - stone_width // 2)
             y_end = y_start + stone_width
@@ -77,10 +78,10 @@ class single_terrain:
             goals[i + 1] = [dis_x, dis_y]
             left_right_flag = 1 - left_right_flag
         
-        final_dis_x = dis_x + gap_x // 2
+        final_dis_x = dis_x + gap_x
         goals[-1] = [final_dis_x, mid_y]
 
-        terrain.height_field_raw[final_dis_x:round(length_x/terrain.horizontal_scale), start_y:start_y+mid_y*2] = 0
+        # terrain.height_field_raw[final_dis_x:round(length_x/terrain.horizontal_scale), start_y:start_y+mid_y*2] = 0
         return terrain, goals, final_dis_x
     
     def hurdle(
@@ -101,11 +102,14 @@ class single_terrain:
         mid_y = round(length_y/ terrain.horizontal_scale)// 2  
         per_x = (round(length_x/ terrain.horizontal_scale)- platform_size) // num_goals
 
+
         hurdle_size = round(((hurdle_range[1]-hurdle_range[0])*difficulty +hurdle_range[0])/terrain.horizontal_scale)
         hurdle_height = round(((hurdle_height_range[1]-hurdle_height_range[0])*difficulty + hurdle_height_range[0])/terrain.vertical_scale)
 
         platform_size = round(platform_size / terrain.horizontal_scale)
-        terrain.height_field_raw[start_x:start_x+platform_size, start_y:start_y+2*mid_y] = 0
+        # terrain.height_field_raw[start_x:start_x+platform_size, start_y:start_y+2*mid_y] = 0
+
+        terrain.height_field_raw[start_x:start_x +round(length_x/ terrain.horizontal_scale), start_y:start_y+mid_y*2] = 0
 
         flat_size = round(flat_size / terrain.horizontal_scale)
         dis_x = start_x + platform_size
@@ -138,9 +142,11 @@ class single_terrain:
         platform_size = round(platform_size / terrain.horizontal_scale)
         terrain.height_field_raw[start_x:start_x+platform_size, start_y:start_y+2*mid_y] = 0
         bridge_start_x = platform_size + start_x
-        bridge_end_x = start_x + round(length_x / terrain.horizontal_scale)
+        bridge_length = round(length_x / terrain.horizontal_scale)
+        bridge_end_x = start_x + bridge_length
+
         for i in range(num_goals):
-            goals[i] = [bridge_start_x+bridge_end_x/num_goals*i, mid_y]  
+            goals[i] = [bridge_start_x + bridge_length/num_goals*i, mid_y]  
        
         left_y1 = 0
         left_y2 = int(mid_y - bridge_width // 2) 
@@ -148,8 +154,8 @@ class single_terrain:
         right_y2 = mid_y*2
         terrain.height_field_raw[bridge_start_x:bridge_end_x, left_y1:left_y2] = -bridge_height
         terrain.height_field_raw[bridge_start_x:bridge_end_x, right_y1:right_y2] = -bridge_height
-        terrain.height_field_raw[bridge_start_x:bridge_end_x, left_y2:right_y1] = 0
-        terrain.height_field_raw[start_x+bridge_end_x:start_x+bridge_end_x+platform_size:] = 0
+
+        # terrain.height_field_raw[bridge_start_x:bridge_end_x, left_y2:right_y1] = 0
 
         return terrain,goals,bridge_end_x
 
@@ -241,7 +247,7 @@ class single_terrain:
         dis_x = start_x + platform_size
 
         for i in range(num_goals):
-            goals[i]=[start_x+platform_size+per_x*i,start_y+per_y]
+            goals[i]=[dis_x+per_x*i,start_y+per_y]
 
         
         for i in range(num_goals):
@@ -265,7 +271,7 @@ class single_terrain:
             start_y = 0,
             platform_size=1.0, 
             difficulty = 0.5,
-            amplitude_range=[1.0,2.0]
+            amplitude_range=[0.05,0.1]
             ):   
         goals = np.zeros((num_goals, 2))
         mid_y = round(length_y/ terrain.horizontal_scale) //2
@@ -276,11 +282,12 @@ class single_terrain:
             goals[i]=[start_x+platform_size+mid_x*i,start_y+mid_y]
         
         x_indices = np.arange(start_x, start_x + mid_x*num_goals + platform_size)
-        amplitude = round(((amplitude_range[1]-amplitude_range[0])*difficulty + amplitude_range[0])/terrain.horizontal_scale)
+        amplitude = round(((amplitude_range[1]-amplitude_range[0])*difficulty + amplitude_range[0])/terrain.vertical_scale)
         wave_pattern = amplitude * np.sin(2 * np.pi * x_indices / length_x)
 
         for i, wave_height in enumerate(wave_pattern):
             terrain.height_field_raw[x_indices[i], start_y:start_y +mid_y*2] = wave_height
+
         terrain.height_field_raw[start_x :start_x + platform_size, start_y:start_y+ mid_y*2] = 0
 
         return terrain,goals,start_x+mid_x*num_goals

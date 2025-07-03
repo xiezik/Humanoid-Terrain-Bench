@@ -15,20 +15,19 @@ class combine_config:
         ]
 
         multiplication = [
-                [single[2],single[8]],#gap_bridge,1
-                [single[7],single[2]],#slope_bridge,2
-                [single[6],single[8]],#wave_gap,3
-                [single[2],single[6]],#wave_bridge,4
+                [single[8],single[2],],#gap_bridge,0
+                [single[6],single[8]],#wave_gap,1
+                [single[6],single[2]],#wave_bridge,2
         ]
 
         addition = [
-                [single[2],single[8]]
+                [single[5],single[6],single[7],single[8]]
         ]
 
         proportions = [
-                ("single", 0, 0.3),#bridge
+                # ("single", 0, 0.3),#bridge
                 # ("addition", 0, 0.5),
-                # ("multiplication", 0, 0.4),
+                ("multiplication", 0, 0.4),
         ]
 
 class generator:
@@ -56,7 +55,7 @@ class generator:
                 terrain_list = combine_config.addition[id]
                 num_terrain = len(terrain_list)
                 platform_size = terrain_config.platform_size
-                length_x = (terrain_config.terrain_length) // num_terrain - platform_size
+                length_x = (terrain_config.terrain_length) // num_terrain
                 length_y = terrain_config.terrain_width
                 num_goals = terrain_config.num_goals // num_terrain
                 horizontal_scale = terrain.horizontal_scale
