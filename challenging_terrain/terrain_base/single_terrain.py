@@ -171,9 +171,11 @@ class single_terrain:
         goals = np.zeros((num_goals, 2))
         length_x = round(length_x / terrain.horizontal_scale)
         length_y = round(length_y / terrain.horizontal_scale)
+        platform_size = round(platform_size / terrain.horizontal_scale)
+
         for i in range(num_goals):
-            goals[i]=[start_x+length_x/num_goals*i,start_y+length_y//2]
-        terrain.height_field_raw[start_x:start_x+length_x, start_y:start_y + length_y] = 0
+            goals[i]=[start_x+platform_size+length_x/num_goals*i,start_y+length_y//2]
+
         return terrain,goals,length_x
 
     def uneven(terrain,

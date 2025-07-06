@@ -1,4 +1,7 @@
-# Humanoid Terrain Bench
+# [Humanoid Terrain Bench](https://github.com/shiki-ta/Humanoid-Terrain-Bench/tree/master)
+
+![Terrain](images/terrain.png)
+
 
 ### Installation ###
 ```bash
@@ -34,7 +37,7 @@ python train.py --exptid h1-2 --device cuda:0 --resume --resumeid=test --checkpo
 python play.py --exptid test
 ```
 
-### Arguments
+### Arguments ###
 - --exptid: string,  to describe the run. 
 - --device: can be `cuda:0`, `cpu`, etc.
 - --checkpoint: the specific checkpoint you want to load. If not specified load the latest one.
@@ -42,3 +45,10 @@ python play.py --exptid test
 - --seed: random seed.
 - --no_wandb: no wandb logging.
 
+### acknowledgement ###
+
+[legged_gym](https://github.com/shiki-ta/Humanoid-Terrain-Bench/tree/master)
+
+[Isaac Gym](https://junxnone.github.io/isaacgymdocs/index.html)
+
+[extreme parkour](https://github.com/chengxuxin/extreme-parkour)

@@ -1036,9 +1036,8 @@ class HumanoidRobot(BaseTask):
         self.terrain_types = torch.div(torch.arange(self.num_envs, device=self.device), (self.num_envs/self.cfg.terrain.num_cols), rounding_mode='floor').to(torch.long)
         self.max_terrain_level = self.cfg.terrain.num_rows
         self.terrain_origins = torch.from_numpy(self.terrain.env_origins).to(self.device).to(torch.float)
-        
-
         self.env_origins[:] = self.terrain_origins[self.terrain_levels, self.terrain_types]
+
         self.terrain_class = torch.from_numpy(self.terrain.terrain_type).to(self.device).to(torch.float)
         self.env_class[:] = self.terrain_class[self.terrain_levels, self.terrain_types]
 
