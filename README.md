@@ -24,17 +24,17 @@ pip install "numpy<1.24" pydelatin wandb tqdm opencv-python ipdb pyfqmr flask
 `cd legged_gym/scripts`
 1. Train base policy:  
 ```
-python train.py --exptid h1-2 --device cuda:0
+python train.py --exptid h1-2 --device cuda:0 --headless --task h1_2_fix
 ```
 
 2. Training Recovery:
 ```
-python train.py --exptid h1-2 --device cuda:0 --resume --resumeid=test --checkpoint=50000
+python train.py --exptid h1-2 --device cuda:0 --resume --resumeid=test --checkpoint=50000 --headless --task h1_2_fix
 ```
 
 3. Play base policy:
 ```
-python play.py --exptid test
+python play.py --exptid test --task h1_2_fix
 ```
 
 ### Arguments ###
