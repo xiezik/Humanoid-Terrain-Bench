@@ -75,6 +75,7 @@ class HumanoidRobot(BaseTask):
         self.height_samples = None
         self.debug_viz = True
         self.init_done = False
+        self.save = save
         self._parse_cfg(self.cfg)
         super().__init__(self.cfg, sim_params, physics_engine, sim_device, headless)
 
@@ -85,6 +86,26 @@ class HumanoidRobot(BaseTask):
             self.set_camera(self.cfg.viewer.pos, self.cfg.viewer.lookat)
         self._init_buffers()
         self._prepare_reward_function()
+
+        if self.save:
+            self.episode_data = {
+                'observations': [[] for _ in range(self.num_envs)],
+                'actions': [[] for _ in range(self.num_envs)],
+                'rewards': [[] for _ in range(self.num_envs)],
+                'height_map': [[] for _ in range(self.num_envs)],
+                'privileged_obs': [[] for _ in range(self.num_envs)],
+                'rigid_body_state': [[] for _ in range(self.num_envs)],
+                'dof_state': [[] for _ in range(self.num_envs)]
+            }
+            self.current_episode_buffer = {
+                'observations': [[] for _ in range(self.num_envs)],
+                'actions': [[] for _ in range(self.num_envs)],
+                'rewards': [[] for _ in range(self.num_envs)],
+                'height_map': [[] for _ in range(self.num_envs)],
+                'privileged_obs': [[] for _ in range(self.num_envs)],
+                'rigid_body_state': [[] for _ in range(self.num_envs)],
+                'dof_state': [[] for _ in range(self.num_envs)]
+            }
         # init data save buffer
         self.init_done = True
         self.global_counter = 0
@@ -150,7 +171,28 @@ class HumanoidRobot(BaseTask):
         else:
             self.extras["depth"] = None
 
-                    
+        if self.save:
+            for env_idx in range(self.num_envs):
+                self.current_episode_buffer['observations'][env_idx].append(
+                    self.obs_buf[env_idx].cpu().numpy().copy())  
+                self.current_episode_buffer['actions'][env_idx].append(
+                    self.actions[env_idx].cpu().numpy().copy())      
+                
+                self.current_episode_buffer['rewards'][env_idx].append(
+                    self.rew_buf[env_idx].cpu().numpy().copy()) 
+                
+                self.current_episode_buffer['height_map'][env_idx].append(
+                    self.measured_heights_data[env_idx].cpu().numpy().copy()) 
+                
+                self.current_episode_buffer['rigid_body_state'][env_idx].append(
+                    self.rigid_body_states[env_idx].cpu().numpy().copy()) 
+                
+                self.current_episode_buffer['dof_state'][env_idx].append(
+                    self.dof_state[env_idx].cpu().numpy().copy())  
+
+                if self.privileged_obs_buf is not None:
+                    self.current_episode_buffer['privileged_obs'][env_idx].append(
+                        self.privileged_obs_buf[env_idx].cpu().numpy().copy())      
 
         if(self.cfg.rewards.is_play):
             if(self.total_times > 0):
@@ -329,6 +371,45 @@ class HumanoidRobot(BaseTask):
         """
         if len(env_ids) == 0:
             return
+        
+        if self.save:
+            for env_id in env_ids:
+                try:
+                    if len(self.current_episode_buffer['observations'][env_id]) > 750:
+                        # 转换为numpy数组
+                        episode_obs = np.stack(self.current_episode_buffer['observations'][env_id])  # [T,*]
+                        episode_act = np.stack(self.current_episode_buffer['actions'][env_id])       # [T,*]
+                        episode_rew = np.stack(self.current_episode_buffer['rewards'][env_id])      # [T]
+                        episode_hei = np.stack(self.current_episode_buffer['height_map'][env_id])      # [T, 396]
+                        episode_body = np.stack(self.current_episode_buffer['rigid_body_state'][env_id]) # [T,13,13] first is root
+                        episode_dof = np.stack(self.current_episode_buffer['dof_state'][env_id])
+                      
+                        # 存入主数据存储
+                        self.episode_data['observations'][env_id].append(episode_obs)
+                        self.episode_data['actions'][env_id].append(episode_act)
+                        self.episode_data['rewards'][env_id].append(episode_rew)
+                        self.episode_data['height_map'][env_id].append(episode_hei)
+                        self.episode_data['rigid_body_state'][env_id].append(episode_body)
+                        self.episode_data['dof_state'][env_id].append(episode_dof)
+
+                        
+                        # 处理privileged观测
+                        if self.privileged_obs_buf is not None:
+                            episode_priv = np.stack(self.current_episode_buffer['privileged_obs'][env_id]) # [T,*]
+                            self.episode_data['privileged_obs'][env_id].append(episode_priv)
+                        
+                        # 清空当前buffer
+                        self.current_episode_buffer['observations'][env_id] = []
+                        self.current_episode_buffer['actions'][env_id] = []
+                        self.current_episode_buffer['rewards'][env_id] = []
+                        self.current_episode_buffer['height_map'][env_id] = []
+                        self.current_episode_buffer['privileged_obs'][env_id] = []
+                        self.current_episode_buffer['rigid_body_state'][env_id] = []
+                        self.current_episode_buffer['dof_state'][env_id] = []
+                        
+                        print(f"Env {env_id} have saved {episode_obs.shape[0]} step data")
+                except Exception as e:
+                    print(f"An error occured when saving env {env_id}: {str(e)}")
         
         # update curriculum
         if self.cfg.terrain.curriculum:
@@ -1080,6 +1161,9 @@ class HumanoidRobot(BaseTask):
         base_pos = (self.root_states[i, :3]).cpu().numpy()
         heights = self.measured_heights[i].cpu().numpy()
         height_points = quat_apply_yaw(self.base_quat[i].repeat(heights.shape[0]), self.height_points[i]).cpu().numpy()
+        if self.save:
+            heights = self.measured_heights_data[i].cpu().numpy()
+            height_points = quat_apply_yaw(self.base_quat[i].repeat(heights.shape[0]), self.height_points_data[i]).cpu().numpy()
         for j in range(heights.shape[0]):
             x = height_points[j, 0] + base_pos[0]
             y = height_points[j, 1] + base_pos[1]

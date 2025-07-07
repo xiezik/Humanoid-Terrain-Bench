@@ -37,6 +37,12 @@ python train.py --exptid h1-2 --device cuda:0 --resume --resumeid=test --checkpo
 python play.py --exptid test
 ```
 
+4. record trace as dataset
+
+```
+python record_replay.py --exptid test --save
+```
+
 ### Arguments ###
 - --exptid: string,  to describe the run. 
 - --device: can be `cuda:0`, `cpu`, etc.
@@ -44,6 +50,7 @@ python play.py --exptid test
 - --resume: resume from another checkpoint, used together with `--resumeid`.
 - --seed: random seed.
 - --no_wandb: no wandb logging.
+- --save: make dataset
 
 ### acknowledgement ###
 
