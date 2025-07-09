@@ -7,16 +7,15 @@
 ```bash
 conda create -n terrain python=3.8
 conda activate terrain
-cd
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118   #or cu113,cu115,cu121, based on your cuda version
 
 git clone https://github.com/shiki-ta/Humanoid-Terrain-Bench.git
 cd Humanoid-Terrain-Bench
 # Download the Isaac Gym binaries from https://developer.nvidia.com/isaac-gym 
 cd isaacgym/python && pip install -e .
-cd ~/Humanoid-Terrain-Bench/rsl_rl && pip install -e .
-cd ~/Humanoid-Terrain-Bench/legged_gym && pip install -e .
-cd ~/Humanoid-Terrain-Bench/challenging_terrain && pip install -e .
+cd rsl_rl && pip install -e .
+cd legged_gym && pip install -e .
+cd challenging_terrain && pip install -e .
 pip install "numpy<1.24" pydelatin wandb tqdm opencv-python ipdb pyfqmr flask
 ```
 
@@ -52,10 +51,21 @@ python record_replay.py --exptid test --save
 - --no_wandb: no wandb logging.
 - --save: make dataset
 
-### acknowledgement ###
+### Acknowledgement ###
 
-[legged_gym](https://github.com/shiki-ta/Humanoid-Terrain-Bench/tree/master)
+[legged_gym](https://github.com/leggedrobotics/legged_gym)
 
-[Isaac Gym](https://junxnone.github.io/isaacgymdocs/index.html)
+[Isaac Gym](https://developer.nvidia.com/isaac-gym)
 
 [extreme parkour](https://github.com/chengxuxin/extreme-parkour)
+
+### Citation
+If you found any part of this code useful, please consider citing:
+```
+@article{fan2025one,
+  title={One Policy but Many Worlds: A Scalable Unified Policy for Versatile Humanoid Locomotion},
+  author={Fan, Yahao and Gui, Tianxiang and Ji, Kaiyang and Ding, Shutong and Zhang, Chixuan and Gu, Jiayuan and Yu, Jingyi and Wang, Jingya and Shi, Ye},
+  journal={arXiv preprint arXiv:2505.18780},
+  year={2025}
+}
+```
