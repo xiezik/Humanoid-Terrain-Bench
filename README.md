@@ -1,13 +1,10 @@
 # [Humanoid Terrain Bench](https://github.com/shiki-ta/Humanoid-Terrain-Bench/tree/master)
 
-![Terrain](images/terrain.png)
-
-
 ### Installation ###
 ```bash
 conda create -n terrain python=3.8
 conda activate terrain
-cd
+
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118   #or cu113,cu115,cu121, based on your cuda version
 
 git clone https://github.com/shiki-ta/Humanoid-Terrain-Bench.git
@@ -52,7 +49,8 @@ python record_replay.py --exptid test --save
 - --no_wandb: no wandb logging.
 - --save: make dataset
 
-### acknowledgement ###
+
+### Acknowledgement ###
 
 [legged_gym](https://github.com/shiki-ta/Humanoid-Terrain-Bench/tree/master)
 
