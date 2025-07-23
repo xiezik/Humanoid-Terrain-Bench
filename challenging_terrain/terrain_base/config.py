@@ -25,7 +25,7 @@ class terrain_config:
         measure_horizontal_noise = 0.0
 
         max_init_terrain_level = 5 # starting curriculum state
-        terrain_length = 10.
+        terrain_length = 15.
         terrain_width = 4.
         platform_size = 1.5
         num_rows= 10 # number of terrain rows (levels)  # spreaded is benifitiall !

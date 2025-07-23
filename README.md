@@ -1,18 +1,16 @@
-# [Humanoid Terrain Bench](https://github.com/shiki-ta/Humanoid-Terrain-Bench/tree/master)
+# [Multi-Terrain Humanoid Locomotion Challenge in Human-Robot-Scene Interaction and Collaboration (ICCV 2025 Workshop)](https://human-robot-scene.github.io/Terrain-Challenge/)
 
-# [For ***ICCV 2025*** Human-Robot-Scene Interaction and Collaboration ](https://human-robot-scene.github.io/)
-
-![Terrain](images/terrain.png)
-
+![Workshop](images/workshop.png)
 
 ## Introduction
 
 This package(challenging_terrain) contains 9 types of terrains (which will be continuously expanded in the future) and a large number of terrains arranged in various combinations. The basic module configuration code based on Legged Gym is provided, allowing users to achieve plug and play of terrain modules within their existing Legged Gym framework. 
 
-This code is compatible with various robots, including but not limited to humanoid robots such as Unitree G1, Unitree H1-2, Fourier GR1-T2, which will be continuously added in the future. 
+This code is compatible with various robots, including but not limited to humanoid robots such as Unitree G1, Unitree H1-2, Fourier GR1-T2, Fourier GRX-N1,which will be continuously added in the future. 
 
 Provided an online data collection module that can store trained policies in dataset format. The evaluation module is embedded in the code and only requires one parameter to quantitatively evaluate the trained policy indicators.
 
+![Terrain](images/terrain.png)
 ### Installation ###
 ```bash
 conda create -n terrain python=3.8
