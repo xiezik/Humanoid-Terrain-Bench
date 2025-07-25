@@ -10,7 +10,6 @@ This code is compatible with various robots, including but not limited to humano
 
 Provided an online data collection module that can store trained policies in dataset format. The evaluation module is embedded in the code and only requires one parameter to quantitatively evaluate the trained policy indicators.
 
-![Terrain](images/terrain.png)
 ### Installation ###
 ```bash
 conda create -n terrain python=3.8

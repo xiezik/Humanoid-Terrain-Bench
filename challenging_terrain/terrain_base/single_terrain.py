@@ -235,7 +235,7 @@ class single_terrain:
                 platform_size=1.0, 
                 difficulty = 0.5,
                 height_range=[0.3,0.4],
-                size_range=[0.3,0.5]
+                size_range=[0.6,0.7]
                 ):
 
         goals = np.zeros((num_goals, 2))

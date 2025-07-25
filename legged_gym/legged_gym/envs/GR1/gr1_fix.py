@@ -139,7 +139,6 @@ class GR1FixCfgPPO( LeggedRobotCfgPPO ):
     class algorithm( LeggedRobotCfgPPO.algorithm ):
         entropy_coef = 0.01
     class runner( LeggedRobotCfgPPO.runner ):
-        policy_class_name = 'ActorCriticRecurrent'
         run_name = ''
         experiment_name = 'gr1_fix'
         max_iterations = 50001 # number of policy updates

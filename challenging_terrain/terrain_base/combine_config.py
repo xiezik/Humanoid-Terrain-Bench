@@ -21,7 +21,7 @@ class combine_config:
         ]
 
         addition = [
-                [single[5],single[6],single[7],single[8]]
+                [single[5],single[2],single[4],single[8]]
         ]
 
         proportions = [
