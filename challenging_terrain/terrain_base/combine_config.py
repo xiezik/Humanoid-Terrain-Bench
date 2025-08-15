@@ -18,6 +18,8 @@ class combine_config:
                 [single[8],single[2],],#gap_bridge,0
                 [single[6],single[8]],#wave_gap,1
                 [single[6],single[2]],#wave_bridge,2
+                [single[8],single[6],single[5],single[2]],#wave_bridge,3
+                [single[5],single[6],single[2]],#wave_bridge,3
         ]
 
         addition = [
@@ -25,9 +27,9 @@ class combine_config:
         ]
 
         proportions = [
-                ("single", 3, 0.3),#bridge
+                ("single", 5, 0.3),#
                 # ("addition", 0, 0.5),
-                # ("multiplication", 0, 0.4),
+                # ("multiplication", 3, 0.4),
         ]
 
 class generator:

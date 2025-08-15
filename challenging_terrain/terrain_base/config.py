@@ -1,4 +1,5 @@
 class terrain_config:
+        mesh_type = "terrain"
         max_error = 0.1 # for fast
         max_error_camera = 2
 
@@ -24,10 +25,10 @@ class terrain_config:
         measured_points_y = [-0.75, -0.6, -0.45, -0.3, -0.15, 0., 0.15, 0.3, 0.45, 0.6, 0.75]
         measure_horizontal_noise = 0.0
 
-        max_init_terrain_level = 5 # starting curriculum state
+        max_init_terrain_level = 1 # starting curriculum state
         terrain_length = 10.
         terrain_width = 4.
-        platform_size = 0
+        platform_size = 2.5
         num_rows= 10 # number of terrain rows (levels)  # spreaded is benifitiall !
         num_cols = 20 # number of terrain cols (types)
 

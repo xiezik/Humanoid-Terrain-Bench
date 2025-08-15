@@ -174,7 +174,9 @@ class single_terrain:
         platform_size = round(platform_size / terrain.horizontal_scale)
 
         for i in range(num_goals):
-            goals[i]=[start_x+platform_size+length_x/num_goals*i,start_y+length_y//2]
+            # y_pos = round(random.uniform(0,length_y))
+            y_pos = length_y//2
+            goals[i]=[start_x+platform_size+length_x/num_goals*i,start_y+y_pos]
 
         return terrain,goals,length_x
 
@@ -234,8 +236,8 @@ class single_terrain:
                 start_y = 0,
                 platform_size=1.0, 
                 difficulty = 0.5,
-                height_range=[0.3,0.4],
-                size_range=[0.6,0.7]
+                height_range=[0.1,0.2],
+                size_range=[0.5,0.6]
                 ):
 
         goals = np.zeros((num_goals, 2))
@@ -253,10 +255,12 @@ class single_terrain:
 
         
         for i in range(num_goals):
+
             if(i < num_goals//2):
                 total_step_height += step_height
             else:
                  total_step_height -= step_height
+            # total_step_height += step_height
             terrain.height_field_raw[dis_x : dis_x + step_x, start_y : start_y + per_y*2] = total_step_height
             dis_x += step_x
 
@@ -360,3 +364,4 @@ class single_terrain:
         terrain.height_field_raw[start_x :start_x + platform_size, start_y :start_y + mid_y*2] = 0
 
         return terrain, goals,start_x+mid_x*num_goals
+    

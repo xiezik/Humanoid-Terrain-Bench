@@ -45,6 +45,7 @@ from legged_gym import LEGGED_GYM_ROOT_DIR
 from legged_gym.envs.base.base_task import BaseTask
 
 from terrain_base.terrain import Terrain
+from terrain_base.config import terrain_config
 
 from legged_gym.utils.math import *
 from legged_gym.utils.helpers import class_to_dict
@@ -111,6 +112,12 @@ class HumanoidRobot(BaseTask):
         self.global_counter = 0
         self.total_env_steps_counter = 0
         self.time_stamp = 0
+
+        self.total_times = 0
+        self.last_times = -1
+        self.success_times = 0
+        self.complete_times = 0.
+
         self.reset_idx(torch.arange(self.num_envs, device=self.device))
         self.post_physics_step()
 
@@ -197,9 +204,9 @@ class HumanoidRobot(BaseTask):
         if(self.cfg.rewards.is_play):
             if(self.total_times > 0):
                 if(self.total_times > self.last_times):
-                    print("total_times=",self.total_times)
-                    print("success_rate=",self.success_times / self.total_times)
-                    print("complete_rate=",(self.complete_times / self.total_times).cpu().numpy().copy())
+                    # print("total_times=",self.total_times)
+                    # print("success_rate=",self.success_times / self.total_times)
+                    # print("complete_rate=",(self.complete_times / self.total_times).cpu().numpy().copy())
                     self.last_times = self.total_times
 
         return self.obs_buf, self.privileged_obs_buf, self.rew_buf, self.reset_buf, self.extras
@@ -328,7 +335,7 @@ class HumanoidRobot(BaseTask):
         if self.viewer and self.enable_viewer_sync and self.debug_viz:
             self.gym.clear_lines(self.viewer)
             # self._draw_height_samples()
-            # self._draw_goals()
+            self._draw_goals()
             # self._draw_feet()
             if self.cfg.depth.use_camera:
                 window_name = "Depth Image"
@@ -358,6 +365,10 @@ class HumanoidRobot(BaseTask):
         self.reset_buf |= roll_cutoff
         self.reset_buf |= pitch_cutoff
         self.reset_buf |= height_cutoff
+
+        self.total_times += len(self.reset_buf.nonzero(as_tuple=False).flatten())
+        self.success_times += len(reach_goal_cutoff.nonzero(as_tuple=False).flatten())
+        self.complete_times += (self.cur_goal_idx[self.reset_buf.nonzero(as_tuple=False).flatten()] / self.cfg.terrain.num_goals).sum()
 
     def reset_idx(self, env_ids):
         """ Reset some environments.
@@ -555,8 +566,13 @@ class HumanoidRobot(BaseTask):
 
         start = time()
         print("*"*80)
-        self.terrain = Terrain(self.num_envs)
-        self._create_trimesh()
+        mesh_type = terrain_config.mesh_type
+
+        if mesh_type=='None':
+            self._create_ground_plane()
+        else:
+            self.terrain = Terrain(self.num_envs)
+            self._create_trimesh()
 
         print("Finished creating ground. Time taken {:.2f} s".format(time() - start))
         print("*"*80)
@@ -814,16 +830,9 @@ class HumanoidRobot(BaseTask):
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor).view(self.num_envs, -1, 2)
 
         self.dof_pos = self.dof_state[...,0]
-
-        # print("self.dof_state=", self.dof_state)
-        # print("self.dof_pos=", self.dof_pos)
-        # print("self.dof_pos.shape", self.dof_pos.shape)
-
         self.dof_vel = self.dof_state[..., 1]
-
         self.base_quat = self.root_states[:, 3:7]
 
-        # self.force_sensor_tensor = gymtorch.wrap_tensor(force_sensor_tensor).view(self.num_envs, 4, 6) # for feet only, see create_env()
         self.contact_forces = gymtorch.wrap_tensor(net_contact_forces).view(self.num_envs, -1, 3) # shape: num_envs, num_bodies, xyz axis
 
         # initialize some data used later on
@@ -922,6 +931,16 @@ class HumanoidRobot(BaseTask):
         self.episode_sums = {name: torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
                              for name in self.reward_scales.keys()}
 
+    def _create_ground_plane(self):
+        """ Adds a ground plane to the simulation, sets friction and restitution based on the cfg.
+        """
+        plane_params = gymapi.PlaneParams()
+        plane_params.normal = gymapi.Vec3(0.0, 0.0, 1.0)
+        plane_params.static_friction = self.cfg.terrain.static_friction
+        plane_params.dynamic_friction = self.cfg.terrain.dynamic_friction
+        plane_params.restitution = self.cfg.terrain.restitution
+        self.gym.add_ground(self.sim, plane_params)
+
     def _create_trimesh(self):
         """ Adds a triangle mesh terrain to the simulation, sets parameters based on the cfg.
             Very slow when horizontal_scale is small
@@ -1012,12 +1031,6 @@ class HumanoidRobot(BaseTask):
         self.num_dofs = len(self.dof_names)
         feet_names = [s for s in body_names if self.cfg.asset.foot_name in s]
         knee_names = [s for s in body_names if self.cfg.asset.knee_name in s]
-
-
-        # for s in ["FR_foot", "FL_foot", "RR_foot", "RL_foot"]:
-        #     feet_idx = self.gym.find_asset_rigid_body_index(robot_asset, s)
-        #     sensor_pose = gymapi.Transform(gymapi.Vec3(0.0, 0.0, 0.0))
-        #     self.gym.create_asset_force_sensor(robot_asset, feet_idx, sensor_pose)
         
         penalized_contact_names = []
         for name in self.cfg.asset.penalize_contacts_on:
@@ -1088,48 +1101,46 @@ class HumanoidRobot(BaseTask):
         self.termination_contact_indices = torch.zeros(len(termination_contact_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(termination_contact_names)):
             self.termination_contact_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], termination_contact_names[i])
-
-        # hip_names = ["FR_hip_joint", "FL_hip_joint", "RR_hip_joint", "RL_hip_joint"]
-        # self.hip_indices = torch.zeros(len(hip_names), dtype=torch.long, device=self.device, requires_grad=False)
-        # for i, name in enumerate(hip_names):
-        #     self.hip_indices[i] = self.dof_names.index(name)
-        # thigh_names = ["FR_thigh_joint", "FL_thigh_joint", "RR_thigh_joint", "RL_thigh_joint"]
-        # self.thigh_indices = torch.zeros(len(thigh_names), dtype=torch.long, device=self.device, requires_grad=False)
-        # for i, name in enumerate(thigh_names):
-        #     self.thigh_indices[i] = self.dof_names.index(name)
-        # calf_names = ["FR_calf_joint", "FL_calf_joint", "RR_calf_joint", "RL_calf_joint"]
-        # self.calf_indices = torch.zeros(len(calf_names), dtype=torch.long, device=self.device, requires_grad=False)
-        # for i, name in enumerate(calf_names):
-        #     self.calf_indices[i] = self.dof_names.index(name)
-    
+ 
     def _get_env_origins(self):
         """ Sets environment origins. On rough terrain the origins are defined by the terrain platforms.
             Otherwise create a grid.
         """
+        if terrain_config.mesh_type == "None":
+            self.custom_origins = False
+            self.env_origins = torch.zeros(self.num_envs, 3, device=self.device, requires_grad=False)
+            # create a grid of robots
+            num_cols = np.floor(np.sqrt(self.num_envs))
+            num_rows = np.ceil(self.num_envs / num_cols)
+            xx, yy = torch.meshgrid(torch.arange(num_rows), torch.arange(num_cols))
+            spacing = self.cfg.env.env_spacing
+            self.env_origins[:, 0] = spacing * xx.flatten()[:self.num_envs]
+            self.env_origins[:, 1] = spacing * yy.flatten()[:self.num_envs]
+            self.env_origins[:, 2] = 0.
+        else:
+            self.custom_origins = True
+            self.env_origins = torch.zeros(self.num_envs, 3, device=self.device, requires_grad=False)
+            self.env_class = torch.zeros(self.num_envs, device=self.device, requires_grad=False)
+            # put robots at the origins defined by the terrain
+            max_init_level = self.cfg.terrain.max_init_terrain_level # 2
+            if not self.cfg.terrain.curriculum: max_init_level = self.cfg.terrain.num_rows - 1
+            self.terrain_levels = torch.randint(0, max_init_level+1, (self.num_envs,), device=self.device)
+            self.terrain_types = torch.div(torch.arange(self.num_envs, device=self.device), (self.num_envs/self.cfg.terrain.num_cols), rounding_mode='floor').to(torch.long)
+            self.max_terrain_level = self.cfg.terrain.num_rows
+            self.terrain_origins = torch.from_numpy(self.terrain.env_origins).to(self.device).to(torch.float)
 
-        self.custom_origins = True
-        self.env_origins = torch.zeros(self.num_envs, 3, device=self.device, requires_grad=False)
-        self.env_class = torch.zeros(self.num_envs, device=self.device, requires_grad=False)
-        # put robots at the origins defined by the terrain
-        max_init_level = self.cfg.terrain.max_init_terrain_level # 2
-        if not self.cfg.terrain.curriculum: max_init_level = self.cfg.terrain.num_rows - 1
-        self.terrain_levels = torch.randint(0, max_init_level+1, (self.num_envs,), device=self.device)
-        self.terrain_types = torch.div(torch.arange(self.num_envs, device=self.device), (self.num_envs/self.cfg.terrain.num_cols), rounding_mode='floor').to(torch.long)
-        self.max_terrain_level = self.cfg.terrain.num_rows
-        self.terrain_origins = torch.from_numpy(self.terrain.env_origins).to(self.device).to(torch.float)
-        self.env_origins[:] = self.terrain_origins[self.terrain_levels, self.terrain_types]
+            self.env_origins[:] = self.terrain_origins[self.terrain_levels, self.terrain_types]
+            self.terrain_class = torch.from_numpy(self.terrain.terrain_type).to(self.device).to(torch.float)
+            self.env_class[:] = self.terrain_class[self.terrain_levels, self.terrain_types]
 
-        self.terrain_class = torch.from_numpy(self.terrain.terrain_type).to(self.device).to(torch.float)
-        self.env_class[:] = self.terrain_class[self.terrain_levels, self.terrain_types]
-
-        self.terrain_goals = torch.from_numpy(self.terrain.goals).to(self.device).to(torch.float)
-        self.env_goals = torch.zeros(self.num_envs, self.cfg.terrain.num_goals + self.cfg.env.num_future_goal_obs, 3, device=self.device, requires_grad=False)
-        self.cur_goal_idx = torch.zeros(self.num_envs, device=self.device, requires_grad=False, dtype=torch.long)
-        temp = self.terrain_goals[self.terrain_levels, self.terrain_types]
-        last_col = temp[:, -1].unsqueeze(1)
-        self.env_goals[:] = torch.cat((temp, last_col.repeat(1, self.cfg.env.num_future_goal_obs, 1)), dim=1)[:]
-        self.cur_goals = self._gather_cur_goals()
-        self.next_goals = self._gather_cur_goals(future=1)
+            self.terrain_goals = torch.from_numpy(self.terrain.goals).to(self.device).to(torch.float)
+            self.env_goals = torch.zeros(self.num_envs, self.cfg.terrain.num_goals + self.cfg.env.num_future_goal_obs, 3, device=self.device, requires_grad=False)
+            self.cur_goal_idx = torch.zeros(self.num_envs, device=self.device, requires_grad=False, dtype=torch.long)
+            temp = self.terrain_goals[self.terrain_levels, self.terrain_types]
+            last_col = temp[:, -1].unsqueeze(1)
+            self.env_goals[:] = torch.cat((temp, last_col.repeat(1, self.cfg.env.num_future_goal_obs, 1)), dim=1)[:]
+            self.cur_goals = self._gather_cur_goals()
+            self.next_goals = self._gather_cur_goals(future=1)
 
     def _parse_cfg(self, cfg):
         self.dt = self.cfg.control.decimation * self.sim_params.dt
