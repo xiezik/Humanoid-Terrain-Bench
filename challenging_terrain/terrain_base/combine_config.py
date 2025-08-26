@@ -12,6 +12,7 @@ class combine_config:
                 single_terrain.wave,#6
                 single_terrain.slope,#7
                 single_terrain.gap,#8
+                single_terrain.plot
         ]
 
         multiplication = [
@@ -74,6 +75,7 @@ class generator:
                                                                         start_x=final_x, 
                                                                         platform_size=platform_size, 
                                                                         difficulty=difficulty)
+                        final_x -= round(platform_size / horizontal_scale)
                         goals.append(sub_goals)
 
                 goals = np.vstack(goals)

@@ -112,17 +112,7 @@ def play(args):
         else:
             actions = policy(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
             
-        obs, _, rews, dones, infos = env.step(actions.detach())
-        
-        id = env.lookat_id
-
-        times = env.total_times
-        if(times ==100):
-            print("total_times=",env.total_times)
-            print("success_rate=",env.success_times / env.total_times)
-            print("complete_rate=",(env.complete_times / env.total_times).cpu().numpy().copy())
-            break
-        
+        obs, _, rews, dones, infos = env.step(actions.detach())     
 
 if __name__ == '__main__':
     EXPORT_POLICY = False

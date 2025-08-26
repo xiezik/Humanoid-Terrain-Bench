@@ -94,7 +94,7 @@ class single_terrain:
             platform_size=1., 
             difficulty = 0.5,
             hurdle_range=[0.1, 0.2],
-            hurdle_height_range=[0.1, 0.2],
+            hurdle_height_range=[0.05, 0.15],
             flat_size = 0.6
             ):
         
@@ -236,8 +236,10 @@ class single_terrain:
                 start_y = 0,
                 platform_size=1.0, 
                 difficulty = 0.5,
-                height_range=[0.1,0.2],
-                size_range=[0.5,0.6]
+                height_range=[0.08,0.2],
+                size_range=[0.4,0.5],
+                upstair = True,
+                start_z = 3.0
                 ):
 
         goals = np.zeros((num_goals, 2))
@@ -246,28 +248,30 @@ class single_terrain:
         per_y = round(length_y/ terrain.horizontal_scale) // 2
         step_height = round(((height_range[1]-height_range[0])*difficulty + height_range[0])/terrain.vertical_scale)
         step_x = round(((size_range[0]-size_range[1])*difficulty +size_range[1])/terrain.horizontal_scale)
-        total_step_height = 0
+
+        if(upstair):
+            total_step_height = 0
+        else:
+            total_step_height = round(start_z/terrain.vertical_scale)
 
         dis_x = start_x + platform_size
 
         for i in range(num_goals):
             goals[i]=[dis_x+per_x*i,start_y+per_y]
 
-        
         for i in range(num_goals):
-
-            if(i < num_goals//2):
+            if(upstair):
                 total_step_height += step_height
-            else:
-                 total_step_height -= step_height
-            # total_step_height += step_height
+            else :
+                total_step_height -= step_height
+
             terrain.height_field_raw[dis_x : dis_x + step_x, start_y : start_y + per_y*2] = total_step_height
             dis_x += step_x
 
-        terrain.height_field_raw[start_x:start_x+platform_size,start_y:start_y + per_y*2] = 0
-        terrain.height_field_raw[dis_x:start_x+per_x*num_goals+2*platform_size,start_y:start_y + per_y*2] = total_step_height
+        # terrain.height_field_raw[start_x:start_x+platform_size,start_y:start_y + per_y*2] = 0
+        terrain.height_field_raw[dis_x:start_x+round(length_x/ terrain.horizontal_scale),start_y:start_y + per_y*2] = total_step_height
 
-        return terrain,goals,start_x+per_x*num_goals
+        return terrain,goals,start_x+round(length_x/ terrain.horizontal_scale)
 
     def wave(terrain,
             length_x=18.0,
@@ -306,8 +310,8 @@ class single_terrain:
             start_y = 0,
             platform_size=1.0, 
             difficulty = 0.5,
-            angle_range = [5.0,15.0],
-            uphill=True
+            angle_range = [4.1,10.0],
+            uphill=False
             ):    
 
         goals = np.zeros((num_goals, 2))
@@ -321,7 +325,10 @@ class single_terrain:
         slope_angle = (angle_range[1]-angle_range[0])*difficulty + angle_range[0]
         angle_rad = math.radians(slope_angle)
         total_height = length_x * math.tan(angle_rad)
+
         total_height_units = total_height / terrain.vertical_scale
+
+        start_x += platform_size
 
         for x in range(start_x, start_x + length_x_grid):
             progress = (x - start_x) / length_x_grid
@@ -342,7 +349,7 @@ class single_terrain:
             platform_size=1.0,
             difficulty = 0.5,
             gap_height = 2.,
-            gap_low_range = [0.3,0.4],
+            gap_low_range = [0.15,0.3],
             ):
         
         goals = np.zeros((num_goals, 2))
@@ -359,9 +366,48 @@ class single_terrain:
         
         for i in range(num_goals):
             terrain.height_field_raw[gap_dis_x :gap_dis_x + gap_size, gap_dis_y - mid_y:gap_dis_y + mid_y] = -round(gap_height / terrain.vertical_scale)
-            gap_dis_x += 2*gap_size
+            gap_dis_x += 3*gap_size
         
         terrain.height_field_raw[start_x :start_x + platform_size, start_y :start_y + mid_y*2] = 0
 
         return terrain, goals,start_x+mid_x*num_goals
     
+    def plot(
+            terrain,
+            length_x=18.,
+            length_y=4.,
+            num_goals=8,
+            start_x=0,
+            start_y=0,
+            platform_size=1., 
+            difficulty = 0.5,
+            hurdle_range=[0.1, 0.15],
+            hurdle_height = 1.2,
+            flat_size = 1.0
+            ):
+        
+        goals = np.zeros((num_goals, 2))
+        mid_y = round(length_y/ terrain.horizontal_scale)// 2  
+        per_x = (round(length_x/ terrain.horizontal_scale)- platform_size) // num_goals
+
+
+        hurdle_size = round(((hurdle_range[1]-hurdle_range[0])*difficulty +hurdle_range[0])/terrain.horizontal_scale)// 2
+        hurdle_height = round(hurdle_height/terrain.vertical_scale)
+
+        platform_size = round(platform_size / terrain.horizontal_scale)
+        # terrain.height_field_raw[start_x:start_x+platform_size, start_y:start_y+2*mid_y] = 0
+
+        terrain.height_field_raw[start_x:start_x +round(length_x/ terrain.horizontal_scale), start_y:start_y+mid_y*2] = 0
+
+        flat_size = round(flat_size / terrain.horizontal_scale)
+        dis_x = start_x + platform_size
+
+        for i in range(num_goals):
+            goals[i]=[dis_x+per_x*i,start_y+mid_y]
+
+        for i in range(num_goals):
+
+            terrain.height_field_raw[dis_x-hurdle_size:dis_x+hurdle_size, start_y+mid_y - hurdle_size:start_y+mid_y + hurdle_size] = hurdle_height
+            dis_x += flat_size + hurdle_size * 2
+
+        return terrain,goals,dis_x
