@@ -87,7 +87,7 @@ class HumanoidRobot(BaseTask):
             self.set_camera(self.cfg.viewer.pos, self.cfg.viewer.lookat)
         self._init_buffers()
         self._prepare_reward_function()
-
+    
         if self.save:
             self.episode_data = {
                 'observations': [[] for _ in range(self.num_envs)],

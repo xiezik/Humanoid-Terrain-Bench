@@ -12,7 +12,7 @@ class combine_config:
                 single_terrain.wave,#6
                 single_terrain.slope,#7
                 single_terrain.gap,#8
-                single_terrain.plot
+                single_terrain.plot#9
         ]
 
         multiplication = [

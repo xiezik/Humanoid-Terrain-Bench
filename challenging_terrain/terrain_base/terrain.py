@@ -48,7 +48,7 @@ class Terrain:
         
         self.env_length = cfg.terrain_length
         self.env_width = cfg.terrain_width
-
+        
         self.cfg.num_sub_terrains = cfg.num_rows * cfg.num_cols
         self.env_origins = np.zeros((cfg.num_rows, cfg.num_cols, 3))
         self.terrain_type = np.zeros((cfg.num_rows, cfg.num_cols))

@@ -112,7 +112,7 @@ def play(args):
         else:
             actions = policy(obs.detach(), hist_encoding=True, scandots_latent=depth_latent)
             
-        obs, _, rews, dones, infos = env.step(actions.detach())     
+        obs, _, rews, dones, infos = env.step(actions.detach())
 
 if __name__ == '__main__':
     EXPORT_POLICY = False

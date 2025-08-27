@@ -65,11 +65,7 @@ class GR1FixCfg( LeggedRobotCfg ):
         env_spacing = 3.  # not used with heightfields/trimeshes 
 
         contact_buf_len = 100
-
-    class depth( LeggedRobotCfg.depth ):
-        position = [0.1, 0, 0.77]  # front camera
-        angle = [-5, 5]  # positive pitch down
-        
+     
     class control( LeggedRobotCfg.control ):
         # PD Drive parameters:
         control_type = 'P'

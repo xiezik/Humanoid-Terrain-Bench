@@ -74,9 +74,6 @@ class H1_2FixCfg( LeggedRobotCfg ):
 
         contact_buf_len = 100
 
-    class depth( LeggedRobotCfg.depth ):
-        position = [0.1, 0, 0.77]  
-        angle = [-5, 5]
         
     class control( LeggedRobotCfg.control ):
         control_type = 'P'
