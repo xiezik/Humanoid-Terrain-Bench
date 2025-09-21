@@ -293,14 +293,15 @@ class HumanoidRobot(BaseTask):
         self.cur_goal_idx[next_flag] += 1      # 切换到下一个目标点索引
         self.reach_goal_timer[next_flag] = 0   # 重置到达目标计时器
 
-        # 检测哪些机器人到达了当前目标点（距离小于阈值）
-        self.reached_goal_ids = torch.norm(self.root_states[:, :2] - self.cur_goals[:, :2], dim=1) < self.cfg.env.next_goal_threshold
-        self.reach_goal_timer[self.reached_goal_ids] += 1  # 为到达目标的机器人增加计时器
+        # 将目标点转换为世界坐标系
+        cur_goals_world = self.cur_goals[:, :2] + self.env_origins[:, :2]
+        next_goals_world = self.next_goals[:, :2] + self.env_origins[:, :2]
+        
+        self.reached_goal_ids = torch.norm(self.root_states[:, :2] - cur_goals_world, dim=1) < self.cfg.env.next_goal_threshold
+        self.reach_goal_timer[self.reached_goal_ids] += 1
 
-        # 计算当前目标点相对于机器人的位置向量
-        self.target_pos_rel = self.cur_goals[:, :2] - self.root_states[:, :2]
-        # 计算下一个目标点相对于机器人的位置向量
-        self.next_target_pos_rel = self.next_goals[:, :2] - self.root_states[:, :2]
+        self.target_pos_rel = cur_goals_world - self.root_states[:, :2]
+        self.next_target_pos_rel = next_goals_world - self.root_states[:, :2]
 
         # 🧭 计算目标点朝向角度（从机器人指向目标点的方向）
         # 注意：这里计算的是"导航朝向"，不是"运动命令朝向"！
@@ -641,18 +642,33 @@ class HumanoidRobot(BaseTask):
         # self.roll: 滚转角，绕X轴旋转，范围 [-π, π]
         # self.pitch: 俯仰角，绕Y轴旋转，范围 [-π, π]
         imu_obs = torch.stack((self.roll, self.pitch), dim=1)
-        
+        self.delta_yaw = self.target_yaw - self.yaw
+        self.delta_next_yaw = self.next_target_yaw - self.yaw
         # ========== 步骤2：定期更新朝向误差信息 ==========
         # 每5个时间步更新一次朝向误差，减少计算开销
         if self.global_counter % 5 == 0:
-            # 计算当前目标点的朝向误差
-            # self.target_yaw: 指向当前目标点的朝向角
-            # self.yaw: 机器人当前的朝向角
-            self.delta_yaw = self.target_yaw - self.yaw
+            # 添加调试信息
+            print("Robot position:", self.root_states[0, :2])  # 机器人位置 - 世界坐标系
+            print("Env origin:", self.env_origins[0, :2])      # 环境原点 - 世界坐标系
+            print("Base init state:", self.base_init_state[:2]) # 基础初始状态 - 相对环境原点坐标系
+            print("Current goal (relative):", self.cur_goals[0, :2])      # 当前目标点 - 相对环境原点坐标系
+            print("Next goal (relative):", self.next_goals[0, :2])        # 下一个目标点 - 相对环境原点坐标系
+            print("Current goal (world):", self.cur_goals[0, :2] + self.env_origins[0, :2])      # 当前目标点 - 世界坐标系
+            print("Next goal (world):", self.next_goals[0, :2] + self.env_origins[0, :2])        # 下一个目标点 - 世界坐标系
+            print("Target pos rel:", self.target_pos_rel[0])   # 相对位置向量 - 机器人本体坐标系
+            print("Robot yaw:", self.yaw[0])                   # 机器人当前朝向 - 世界坐标系
+            print("Target yaw:", self.target_yaw[0])           # 目标朝向 - 世界坐标系
+            print("self.delta_yaw=",self.delta_yaw[0])
+            print("self.delta_next_yaw=",self.delta_next_yaw[0]) 
             
-            # 计算下一个目标点的朝向误差
-            # 提供更远的导航信息，帮助机器人规划路径
-            self.delta_next_yaw = self.next_target_yaw - self.yaw
+            print("######################################################################")
+            
+            # 添加速度和指令信息
+            print("Robot linear velocity:", self.base_lin_vel[0])  # 机器人线速度 - 机器人本体坐标系
+            print("Robot angular velocity:", self.base_ang_vel[0])  # 机器人角速度 - 机器人本体坐标系
+            print("Linear velocity command X:", self.commands[0, 0])  # X方向线速度指令 - 机器人本体坐标系
+            print("Angular velocity command Yaw:", self.commands[0, 2])  # Z轴角速度指令 - 机器人本体坐标系
+            print("Heading command:", self.commands[0, 3])  # 朝向指令 - 世界坐标系
         
         # ========== 步骤3：组装本体感受观测向量 ==========
         # 将各种传感器信息拼接成一个观测向量
@@ -1129,12 +1145,56 @@ class HumanoidRobot(BaseTask):
     def _gather_cur_goals(self, future=0):
         return self.env_goals.gather(1, (self.cur_goal_idx[:, None, None]+future).expand(-1, -1, self.env_goals.shape[-1])).squeeze(1)
 
+    # def _resample_commands(self, env_ids):
+    #     """
+    #     为指定环境重新采样运动命令
+    #     使用智能速度生成策略
+    #     """
+    #     self._resample_commands_intelligent(env_ids)
     def _resample_commands(self, env_ids):
-        """
-        为指定环境重新采样运动命令
-        使用智能速度生成策略
-        """
-        self._resample_commands_intelligent(env_ids)
+        """智能的命令重采样（替换原有的随机采样），集成heading/ang_vel采样和clip逻辑"""
+        # 采样前进速度
+
+        if self.cfg.commands.height_adaptive_speed:
+            adaptive_speeds = self._generate_adaptive_speed(env_ids)
+            self.commands[env_ids, 0] = adaptive_speeds
+        else:
+            self.commands[env_ids, 0] = torch_rand_float(
+                self.command_ranges["lin_vel_x"][0],
+                self.command_ranges["lin_vel_x"][1],
+                (len(env_ids), 1), device=self.device
+            ).squeeze(1)
+
+        if self.cfg.commands.heading_command:
+            if hasattr(self, 'target_yaw') and hasattr(self, 'yaw'):
+                self.commands[env_ids, 3] = self.target_yaw[env_ids]
+            else:
+                self.commands[env_ids, 3] = torch_rand_float(self.command_ranges["heading"][0], self.command_ranges["heading"][1], (len(env_ids), 1), device=self.device).squeeze(1)
+
+            if hasattr(self, 'target_yaw') and hasattr(self, 'yaw'):
+                yaw_error = wrap_to_pi(self.commands[env_ids, 3] - self.yaw[env_ids])
+                self.commands[env_ids, 2] =  0.8 * yaw_error
+            
+            else:
+                self.commands[env_ids, 2] = torch_rand_float(
+                    self.command_ranges["ang_vel_yaw"][0],
+                    self.command_ranges["ang_vel_yaw"][1],
+                    (len(env_ids), 1), device=self.device
+                ).squeeze(1)
+
+        small_command_mask = torch.abs(self.commands[env_ids, 2]) <= self.cfg.commands.ang_vel_clip
+        self.commands[env_ids, 2] = torch.where(small_command_mask, 
+                                                torch.zeros_like(self.commands[env_ids, 2]), 
+                                                self.commands[env_ids, 2])
+
+        small_lin_vel_mask = torch.abs(self.commands[env_ids, 0]) <= self.cfg.commands.lin_vel_clip
+        self.commands[env_ids, 0] = torch.where(small_lin_vel_mask, 
+                                               torch.zeros_like(self.commands[env_ids, 0]), 
+                                               self.commands[env_ids, 0])
+        self.commands[env_ids, 1] = torch.where(small_lin_vel_mask, 
+                                               torch.zeros_like(self.commands[env_ids, 1]), 
+                                               self.commands[env_ids, 1])
+
 
     def _compute_torques(self, actions):
         """ Compute torques from actions.

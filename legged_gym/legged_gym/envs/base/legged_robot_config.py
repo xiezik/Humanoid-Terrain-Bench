@@ -149,7 +149,7 @@ class LeggedRobotCfg(BaseConfig):
         curriculum = True           # 是否启用课程学习
         max_curriculum = 1.         # 最大课程难度
         num_commands = 4            # 命令数量：lin_vel_x, lin_vel_y, ang_vel_yaw, heading
-        resampling_time = 6.        # 命令重新采样时间间隔（秒）
+        resampling_time = 1.        # 命令重新采样时间间隔（秒）
         heading_command = True      # 是否启用朝向命令（从朝向误差计算角速度命令）
         
         lin_vel_clip = 0.1          # 线速度裁剪

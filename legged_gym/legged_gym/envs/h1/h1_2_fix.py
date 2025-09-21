@@ -164,8 +164,8 @@ class H1_2FixCfg( LeggedRobotCfg ):
             """命令范围设置"""
             lin_vel_x = [0.1, 1.2]     # 前进速度范围（m/s）
             lin_vel_y = [0.0, 0.0]     # 侧向速度范围（设为0，只前进）
-            ang_vel_yaw = [0, 0]       # 偏航角速度范围（设为0，直线行走）
-            heading = [0, 0]           # 朝向角度范围
+            ang_vel_yaw = [-1.2, 1.2]       # 偏航角速度范围（设为0，直线行走）
+            heading = [-1.2, 1.2]           # 朝向角度范围
 
         class max_ranges( LeggedRobotCfg.commands.max_ranges ):
             """最大命令范围（课程学习后期或固定模式）"""
