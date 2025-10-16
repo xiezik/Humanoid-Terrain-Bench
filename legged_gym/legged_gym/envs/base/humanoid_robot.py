@@ -58,72 +58,55 @@ import matplotlib.pyplot as plt
 
 
 class HumanoidRobot(BaseTask):
-    """
-    人形机器人环境类
-    继承自BaseTask，实现人形机器人的仿真环境
-    """
-    
+
     def __init__(self, cfg: LeggedRobotCfg, sim_params, physics_engine, sim_device, headless, save):
-        """
-        人形机器人环境初始化
-        解析配置文件，创建仿真环境、地形和机器人，初始化训练用的PyTorch缓冲区
-        
+        """ Parses the provided config file,
+            calls create_sim() (which creates, simulation, terrain and environments),
+            initilizes pytorch buffers used during training
+
         Args:
-            cfg (LeggedRobotCfg): 环境配置文件对象
-            sim_params (gymapi.SimParams): 仿真参数
-            physics_engine (gymapi.SimType): 物理引擎类型，必须是PhysX
-            sim_device (string): 仿真设备 'cuda' 或 'cpu'  
-            headless (bool): 如果为True则无头运行（不渲染图形）
-            save (bool): 是否保存训练数据用于分析
+            cfg (Dict): Environment config file
+            sim_params (gymapi.SimParams): simulation parameters
+            physics_engine (gymapi.SimType): gymapi.SIM_PHYSX (must be PhysX)
+            device_type (string): 'cuda' or 'cpu'
+            device_id (int): 0, 1, ...
+            headless (bool): Run without rendering if True
         """
-        # 保存配置参数
-        self.cfg = cfg                    # 环境配置对象 (H1_2FixCfg类的实例，包含所有机器人和环境参数)
-        self.sim_params = sim_params      # 仿真参数
-        self.height_samples = None        # 高度图采样数据（稍后初始化）
-        self.debug_viz = True            # 调试可视化开关
-        self.init_done = False           # 初始化完成标志
-        self.save = save                 # 数据保存标志
-        
-        # 解析配置文件，设置内部参数
+        self.cfg = cfg
+        self.sim_params = sim_params
+        self.height_samples = None
+        self.debug_viz = True
+        self.init_done = False
+        self.save = save
         self._parse_cfg(self.cfg)
-        
-        # 调用父类初始化，创建仿真环境、地形和机器人实例
         super().__init__(self.cfg, sim_params, physics_engine, sim_device, headless)
 
-        # 初始化图像处理变换（用于深度相机）
-        # 将深度图像调整到指定尺寸，使用双三次插值
         self.resize_transform = torchvision.transforms.Resize((self.cfg.depth.resized[1], self.cfg.depth.resized[0]), 
                                                               interpolation=torchvision.transforms.InterpolationMode.BICUBIC)
         
-        # 如果不是无头模式，设置相机视角
         if not self.headless:
             self.set_camera(self.cfg.viewer.pos, self.cfg.viewer.lookat)
-            
-        # 初始化PyTorch张量缓冲区（用于存储状态、动作、奖励等）
         self._init_buffers()
-        
-        # 准备奖励函数（设置奖励权重和计算函数）
         self._prepare_reward_function()
     
-        # 如果启用数据保存，初始化数据收集结构
         if self.save:
             self.episode_data = {
-                'observations': [[] for _ in range(self.num_envs)],      # 观测数据
-                'actions': [[] for _ in range(self.num_envs)],           # 动作数据
-                'rewards': [[] for _ in range(self.num_envs)],           # 奖励数据
-                'height_map': [[] for _ in range(self.num_envs)],        # 高度图数据
-                'privileged_obs': [[] for _ in range(self.num_envs)],    # 特权观测数据
-                'rigid_body_state': [[] for _ in range(self.num_envs)],  # 刚体状态数据
-                'dof_state': [[] for _ in range(self.num_envs)]          # 关节状态数据
+                'observations': [[] for _ in range(self.num_envs)],
+                'actions': [[] for _ in range(self.num_envs)],
+                'rewards': [[] for _ in range(self.num_envs)],
+                'height_map': [[] for _ in range(self.num_envs)],
+                'privileged_obs': [[] for _ in range(self.num_envs)],
+                'rigid_body_state': [[] for _ in range(self.num_envs)],
+                'dof_state': [[] for _ in range(self.num_envs)]
             }
             self.current_episode_buffer = {
-                'observations': [[] for _ in range(self.num_envs)],      # 当前episode观测数据
-                'actions': [[] for _ in range(self.num_envs)],           # 当前episode动作数据
-                'rewards': [[] for _ in range(self.num_envs)],           # 当前episode奖励数据
-                'height_map': [[] for _ in range(self.num_envs)],        # 当前episode高度图数据
-                'privileged_obs': [[] for _ in range(self.num_envs)],    # 当前episode特权观测数据
-                'rigid_body_state': [[] for _ in range(self.num_envs)],  # 当前episode刚体状态数据
-                'dof_state': [[] for _ in range(self.num_envs)]          # 当前episode关节状态数据
+                'observations': [[] for _ in range(self.num_envs)],
+                'actions': [[] for _ in range(self.num_envs)],
+                'rewards': [[] for _ in range(self.num_envs)],
+                'height_map': [[] for _ in range(self.num_envs)],
+                'privileged_obs': [[] for _ in range(self.num_envs)],
+                'rigid_body_state': [[] for _ in range(self.num_envs)],
+                'dof_state': [[] for _ in range(self.num_envs)]
             }
         # init data save buffer
         self.init_done = True
@@ -278,130 +261,91 @@ class HumanoidRobot(BaseTask):
         self.gym.end_access_image_tensors(self.sim)
 
     def _update_goals(self):
-        """
-        更新机器人的导航目标
-        
-        这个方法管理机器人在地形中的路径点导航：
-        1. 检查是否到达当前目标点
-        2. 在延迟时间后切换到下一个目标
-        3. 计算相对位置和朝向角度
-        4. 为奖励函数和观测提供目标信息
-        """
-        
-        # 检查是否已经在目标点停留足够长时间，可以切换到下一个目标
         next_flag = self.reach_goal_timer > self.cfg.env.reach_goal_delay / self.dt
-        self.cur_goal_idx[next_flag] += 1      # 切换到下一个目标点索引
-        self.reach_goal_timer[next_flag] = 0   # 重置到达目标计时器
+        self.cur_goal_idx[next_flag] += 1
+        self.reach_goal_timer[next_flag] = 0
 
-        # 将目标点转换为世界坐标系
-        cur_goals_world = self.cur_goals[:, :2] + self.env_origins[:, :2]
-        next_goals_world = self.next_goals[:, :2] + self.env_origins[:, :2]
-        
-        self.reached_goal_ids = torch.norm(self.root_states[:, :2] - cur_goals_world, dim=1) < self.cfg.env.next_goal_threshold
+        self.reached_goal_ids = torch.norm(self.root_states[:, :2] - self.cur_goals[:, :2], dim=1) < self.cfg.env.next_goal_threshold
         self.reach_goal_timer[self.reached_goal_ids] += 1
 
-        self.target_pos_rel = cur_goals_world - self.root_states[:, :2]
-        self.next_target_pos_rel = next_goals_world - self.root_states[:, :2]
+        self.target_pos_rel = self.cur_goals[:, :2] - self.root_states[:, :2]
+        self.next_target_pos_rel = self.next_goals[:, :2] - self.root_states[:, :2]
 
-        # 🧭 计算目标点朝向角度（从机器人指向目标点的方向）
-        # 注意：这里计算的是"导航朝向"，不是"运动命令朝向"！
-        norm = torch.norm(self.target_pos_rel, dim=-1, keepdim=True)  # 计算到目标点的距离
-        target_vec_norm = self.target_pos_rel / (norm + 1e-5)        # 归一化方向向量（避免除零）
-        self.target_yaw = torch.atan2(target_vec_norm[:, 1], target_vec_norm[:, 0])  # 计算朝向目标点的偏航角
+        norm = torch.norm(self.target_pos_rel, dim=-1, keepdim=True)
+        target_vec_norm = self.target_pos_rel / (norm + 1e-5)
+        self.target_yaw = torch.atan2(target_vec_norm[:, 1], target_vec_norm[:, 0])
 
-        # 🧭 计算下一个目标点的朝向角度
-        norm = torch.norm(self.next_target_pos_rel, dim=-1, keepdim=True)  # 计算到下个目标点的距离
-        target_vec_norm = self.next_target_pos_rel / (norm + 1e-5)         # 归一化方向向量
-        self.next_target_yaw = torch.atan2(target_vec_norm[:, 1], target_vec_norm[:, 0])  # 计算朝向下个目标点的偏航角
-        
+        norm = torch.norm(self.next_target_pos_rel, dim=-1, keepdim=True)
+        target_vec_norm = self.next_target_pos_rel / (norm + 1e-5)
+        self.next_target_yaw = torch.atan2(target_vec_norm[:, 1], target_vec_norm[:, 0])
 
     def post_physics_step(self):
+        """ check terminations, compute observations and rewards
+            calls self._post_physics_step_callback() for common computations 
+            calls self._draw_debug_vis() if needed
         """
-        物理仿真步骤后的处理
-        检查终止条件，计算观测和奖励
-        调用self._post_physics_step_callback()进行通用计算
-        如果需要，调用self._draw_debug_vis()进行调试可视化
-        """
-        # 刷新仿真状态张量，获取最新的物理状态
-        self.gym.refresh_actor_root_state_tensor(self.sim)    # 刷新机器人根部状态
-        self.gym.refresh_net_contact_force_tensor(self.sim)   # 刷新接触力
-        self.gym.refresh_rigid_body_state_tensor(self.sim)    # 刷新刚体状态
-        # self.gym.refresh_force_sensor_tensor(self.sim)     # 刷新力传感器（暂未使用）
+        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self.gym.refresh_net_contact_force_tensor(self.sim)
+        self.gym.refresh_rigid_body_state_tensor(self.sim)
+        # self.gym.refresh_force_sensor_tensor(self.sim)
 
-        # 更新计数器
-        self.episode_length_buf += 1    # episode长度计数器递增
-        self.common_step_counter += 1   # 通用步数计数器递增
+        self.episode_length_buf += 1
+        self.common_step_counter += 1
 
-        # 准备计算量：更新机器人状态信息
-        self.base_quat[:] = self.root_states[:, 3:7]  # 更新基座四元数姿态
-        # 将世界坐标系下的速度转换到机器人本体坐标系
-        self.base_lin_vel[:] = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])   # 本体线速度
-        self.base_ang_vel[:] = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])  # 本体角速度
-        self.projected_gravity[:] = quat_rotate_inverse(self.base_quat, self.gravity_vec)       # 本体坐标系下的重力方向
-        # 计算基座线性加速度
+        # prepare quantities
+        self.base_quat[:] = self.root_states[:, 3:7]
+        self.base_lin_vel[:] = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
+        self.base_ang_vel[:] = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
+        self.projected_gravity[:] = quat_rotate_inverse(self.base_quat, self.gravity_vec)
         self.base_lin_acc = (self.root_states[:, 7:10] - self.last_root_vel[:, :3]) / self.dt
 
-        # 从四元数计算欧拉角
         self.roll, self.pitch, self.yaw = euler_from_quaternion(self.base_quat)
 
-        # 检测脚部接触状态
-        contact = torch.norm(self.contact_forces[:, self.feet_indices], dim=-1) > 2.  # 接触力大于2N认为接触
-        self.contact_filt = torch.logical_or(contact, self.last_contacts)  # 当前接触或上一步接触都认为是接触
-        self.last_contacts = contact  # 更新上一步接触状态
+        contact = torch.norm(self.contact_forces[:, self.feet_indices], dim=-1) > 2.
+        self.contact_filt = torch.logical_or(contact, self.last_contacts) 
+        self.last_contacts = contact
+
+        # Update feet air time
+        self.feet_air_time[~contact] += self.dt
         
-        # self._update_jump_schedule()  # 更新跳跃计划（暂未使用）
-        self._update_goals()              # 更新目标点
-        self._post_physics_step_callback()  # 执行后处理回调函数
+        # self._update_jump_schedule()
+        self._update_goals()
+        self._post_physics_step_callback()
 
-        # 计算观测、奖励、重置等
-        self.check_termination()  # 检查终止条件：姿态超限、高度过低、超时、完成目标
-        self.compute_reward()     # 计算奖励：调用所有奖励函数并加权求和
+        # compute observations, rewards, resets, ...
+        self.check_termination()
+        self.compute_reward()
+        env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()
+        self.reset_idx(env_ids)
+
+        self.cur_goals = self._gather_cur_goals()
+        self.next_goals = self._gather_cur_goals(future=1)
+
+        self.update_depth_buffer()
+
+        self.compute_observations() # in some cases a simulation step might be required to refresh some obs (for example body positions)
+
+        self.last_last_actions[:] = self.last_actions[:]
+        self.last_actions[:] = self.actions[:]
+        self.last_dof_vel[:] = self.dof_vel[:]
+        self.last_torques[:] = self.torques[:]
+        self.last_root_vel[:] = self.root_states[:, 7:13]
+        if(self.time_stamp ==5):
+            self.last_foot_action = self.rigid_body_states[:, self.feet_indices, :]
+            self.time_stamp=0
+        else :
+            self.time_stamp=self.time_stamp+1
         
-        # 获取需要重置的环境ID并执行重置
-        env_ids = self.reset_buf.nonzero(as_tuple=False).flatten()  # 找出需要重置的环境
-        self.reset_idx(env_ids)   # 重置指定环境：清空状态、重采样命令、保存数据
-
-        # 更新目标信息（重置后可能改变）
-        self.cur_goals = self._gather_cur_goals()         # 收集当前目标点坐标
-        self.next_goals = self._gather_cur_goals(future=1)  # 收集下一个目标点坐标
-
-        # 更新深度缓冲区（如果使用视觉输入）
-        self.update_depth_buffer()  # 处理深度相机图像数据
-
-        # 计算观测（策略网络的输入）
-        self.compute_observations()  # 组装本体感受观测：IMU、关节、接触、命令等
-
-        # 更新历史状态缓冲区（用于计算动作变化率等）
-        self.last_last_actions[:] = self.last_actions[:]    # 前前次动作
-        self.last_actions[:] = self.actions[:]              # 前次动作
-        self.last_dof_vel[:] = self.dof_vel[:]              # 前次关节速度
-        self.last_torques[:] = self.torques[:]              # 前次关节力矩
-        self.last_root_vel[:] = self.root_states[:, 7:13]   # 前次根部速度（线速度+角速度）
-        
-        # 定期更新脚部状态（每5步更新一次）
-        if(self.time_stamp == 5):
-            self.last_foot_action = self.rigid_body_states[:, self.feet_indices, :]  # 脚部刚体状态
-            self.time_stamp = 0
-        else:
-            self.time_stamp = self.time_stamp + 1
-        
-        # 调试可视化（仅在有查看器且启用调试时）
         if self.viewer and self.enable_viewer_sync and self.debug_viz:
-            self.gym.clear_lines(self.viewer)      # 清除之前的调试线条
-            # self._draw_height_samples()          # 绘制高度采样点（可选）
-            self._draw_goals()                     # 绘制目标点
-            # self._draw_feet()                    # 绘制脚部位置（可选）
-            
-            # 显示深度图像（如果使用深度相机）
+            self.gym.clear_lines(self.viewer)
+            # self._draw_height_samples()
+            # self._draw_goals()
+            # self._draw_feet()
             if self.cfg.depth.use_camera:
                 window_name = "Depth Image"
                 cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-                # 显示当前观察机器人的深度图像
                 cv2.imshow("Depth Image", self.depth_buffer[self.lookat_id, -1].cpu().numpy() + 0.5)
                 cv2.waitKey(1)
-
-        # 更新地形复杂度历史
-        self._update_terrain_complexity_history()
 
     def reindex_feet(self, vec):
         return vec[:, [1, 0, 3, 2]]
@@ -413,11 +357,10 @@ class HumanoidRobot(BaseTask):
         """ Check if environments need to be reset
         """
         self.reset_buf = torch.zeros((self.num_envs, ), dtype=torch.bool, device=self.device)
-        # 策略5.2：放宽终止条件，提高容错性
-        roll_cutoff = torch.abs(self.roll) > 2.0    # 原:1.5 → 新:2.0
-        pitch_cutoff = torch.abs(self.pitch) > 2.0  # 原:1.5 → 新:2.0
+        roll_cutoff = torch.abs(self.roll) > 1.5
+        pitch_cutoff = torch.abs(self.pitch) > 1.5
         reach_goal_cutoff = self.cur_goal_idx >= self.cfg.terrain.num_goals
-        height_cutoff = self.root_states[:, 2] < 0.3  # 原:0.5 → 新:0.3
+        height_cutoff = self.root_states[:, 2] < 0.5
 
         self.time_out_buf = self.episode_length_buf > self.max_episode_length # no terminal reward for time-outs
         self.time_out_buf |= reach_goal_cutoff
@@ -432,33 +375,31 @@ class HumanoidRobot(BaseTask):
         self.complete_times += (self.cur_goal_idx[self.reset_buf.nonzero(as_tuple=False).flatten()] / self.cfg.terrain.num_goals).sum()
 
     def reset_idx(self, env_ids):
-        """
-        重置指定的环境
-        调用self._reset_dofs(env_ids), self._reset_root_states(env_ids), 和 self._resample_commands(env_ids)
-        可选调用self._update_terrain_curriculum(env_ids), self.update_command_curriculum(env_ids)
-        记录episode信息并重置部分缓冲区
+        """ Reset some environments.
+            Calls self._reset_dofs(env_ids), self._reset_root_states(env_ids), and self._resample_commands(env_ids)
+            [Optional] calls self._update_terrain_curriculum(env_ids), self.update_command_curriculum(env_ids) and
+            Logs episode info
+            Resets some buffers
 
         Args:
-            env_ids (list[int]): 需要重置的环境ID列表
+            env_ids (list[int]): List of environment ids which must be reset
         """
-        if len(env_ids) == 0:  # 如果没有环境需要重置，直接返回
+        if len(env_ids) == 0:
             return
         
-        # 如果启用数据保存，处理episode数据
         if self.save:
             for env_id in env_ids:
                 try:
-                    # 只保存足够长的episode（超过750步）
                     if len(self.current_episode_buffer['observations'][env_id]) > 750:
-                        # 将当前episode缓冲区的数据转换为numpy数组
-                        episode_obs = np.stack(self.current_episode_buffer['observations'][env_id])     # 观测数据 [T,*]
-                        episode_act = np.stack(self.current_episode_buffer['actions'][env_id])         # 动作数据 [T,*]
-                        episode_rew = np.stack(self.current_episode_buffer['rewards'][env_id])         # 奖励数据 [T]
-                        episode_hei = np.stack(self.current_episode_buffer['height_map'][env_id])      # 高度图数据 [T, 396]
-                        episode_body = np.stack(self.current_episode_buffer['rigid_body_state'][env_id]) # 刚体状态 [T,13,13] 第一个是根部
-                        episode_dof = np.stack(self.current_episode_buffer['dof_state'][env_id])       # 关节状态数据
+                        # 转换为numpy数组
+                        episode_obs = np.stack(self.current_episode_buffer['observations'][env_id])  # [T,*]
+                        episode_act = np.stack(self.current_episode_buffer['actions'][env_id])       # [T,*]
+                        episode_rew = np.stack(self.current_episode_buffer['rewards'][env_id])      # [T]
+                        episode_hei = np.stack(self.current_episode_buffer['height_map'][env_id])      # [T, 396]
+                        episode_body = np.stack(self.current_episode_buffer['rigid_body_state'][env_id]) # [T,13,13] first is root
+                        episode_dof = np.stack(self.current_episode_buffer['dof_state'][env_id])
                       
-                        # 将episode数据存入主数据存储
+                        # 存入主数据存储
                         self.episode_data['observations'][env_id].append(episode_obs)
                         self.episode_data['actions'][env_id].append(episode_act)
                         self.episode_data['rewards'][env_id].append(episode_rew)
@@ -466,12 +407,13 @@ class HumanoidRobot(BaseTask):
                         self.episode_data['rigid_body_state'][env_id].append(episode_body)
                         self.episode_data['dof_state'][env_id].append(episode_dof)
 
-                        # 处理特权观测数据（如果存在）
+                        
+                        # 处理privileged观测
                         if self.privileged_obs_buf is not None:
-                            episode_priv = np.stack(self.current_episode_buffer['privileged_obs'][env_id]) # 特权观测 [T,*]
+                            episode_priv = np.stack(self.current_episode_buffer['privileged_obs'][env_id]) # [T,*]
                             self.episode_data['privileged_obs'][env_id].append(episode_priv)
                         
-                        # 清空当前episode缓冲区，为下一个episode做准备
+                        # 清空当前buffer
                         self.current_episode_buffer['observations'][env_id] = []
                         self.current_episode_buffer['actions'][env_id] = []
                         self.current_episode_buffer['rewards'][env_id] = []
@@ -484,178 +426,94 @@ class HumanoidRobot(BaseTask):
                 except Exception as e:
                     print(f"An error occured when saving env {env_id}: {str(e)}")
         
-        # 更新课程学习
+        # update curriculum
         if self.cfg.terrain.curriculum:
-            self._update_terrain_curriculum(env_ids)  # 更新地形难度
-        # 避免在每一步都更新命令课程，因为最大命令对所有环境都是通用的
+            self._update_terrain_curriculum(env_ids)
+        # avoid updating command curriculum at each step since the maximum command is common to all envs
         # if self.cfg.commands.curriculum and (self.common_step_counter % self.max_episode_length==0):
-        #     self.update_command_curriculum(env_ids)   # 更新命令难度
+        #     self.update_command_curriculum(env_ids)
 
-        # 重置机器人状态
-        self._reset_dofs(env_ids)           # 重置关节状态（位置、速度）
-        self._reset_root_states(env_ids)    # 重置根部状态（位置、姿态、速度）
-        self._resample_commands(env_ids)    # 重新采样运动命令
-        
-        # 执行一步仿真以应用重置
+        # reset robot states
+        self._reset_dofs(env_ids)
+        self._reset_root_states(env_ids)
+        self._resample_commands(env_ids)
         self.gym.simulate(self.sim)
         self.gym.fetch_results(self.sim, True)
         self.gym.refresh_rigid_body_state_tensor(self.sim)
 
-        # 重置缓冲区数据
-        self.last_last_actions[env_ids] = 0.      # 前前次动作
-        self.last_actions[env_ids] = 0.           # 前次动作
-        self.last_foot_action[env_ids] = 0.       # 前次脚部动作
-        self.last_dof_vel[env_ids] = 0.           # 前次关节速度
-        self.last_torques[env_ids] = 0.           # 前次力矩
-        self.last_root_vel[:] = 0.                # 前次根部速度
-        self.feet_air_time[env_ids] = 0.          # 脚部离地时间
-        self.reset_buf[env_ids] = 1               # 重置标志
-        self.obs_history_buf[env_ids, :, :] = 0.  # 观测历史缓冲区 TODO: 考虑不使用0初始化
-        self.contact_buf[env_ids, :, :] = 0.      # 接触缓冲区
-        self.action_history_buf[env_ids, :, :] = 0.  # 动作历史缓冲区
-        self.cur_goal_idx[env_ids] = 0            # 当前目标索引
-        self.reach_goal_timer[env_ids] = 0        # 到达目标计时器
+        # reset buffers
+        self.last_last_actions[env_ids] = 0.
+        self.last_actions[env_ids] = 0.
+        self.last_foot_action[env_ids] = 0.
+        self.last_dof_vel[env_ids] = 0.
+        self.last_torques[env_ids] = 0.
+        self.last_root_vel[:] = 0.
+        self.feet_air_time[env_ids] = 0.
+        self.reset_buf[env_ids] = 1
+        self.obs_history_buf[env_ids, :, :] = 0.  # reset obs history buffer TODO no 0s
+        self.contact_buf[env_ids, :, :] = 0.
+        self.action_history_buf[env_ids, :, :] = 0.
+        self.cur_goal_idx[env_ids] = 0
+        self.reach_goal_timer[env_ids] = 0
 
-        # 重置地形复杂度缓冲区
-        self.terrain_complexity_ptr[env_ids] = 0
-        self.terrain_complexity_history[env_ids] = 0
-
-        # 填充额外信息（用于日志记录）
+        # fill extras
         self.extras["episode"] = {}
-        # 计算并记录各项奖励的平均值
         for key in self.episode_sums.keys():
             self.extras["episode"]['rew_' + key] = torch.mean(self.episode_sums[key][env_ids]) / self.max_episode_length_s
-            self.episode_sums[key][env_ids] = 0.  # 重置奖励累计
-        self.episode_length_buf[env_ids] = 0      # 重置episode长度
+            self.episode_sums[key][env_ids] = 0.
+        self.episode_length_buf[env_ids] = 0
 
-        # 记录额外的课程学习信息
+        # log additional curriculum info
         if self.cfg.terrain.curriculum:
-            self.extras["episode"]["terrain_level"] = torch.mean(self.terrain_levels.float())  # 平均地形难度
+            self.extras["episode"]["terrain_level"] = torch.mean(self.terrain_levels.float())
         if self.cfg.commands.curriculum:
-            self.extras["episode"]["max_command_x"] = self.command_ranges["lin_vel_x"][1]       # 最大前向速度命令
-        
-        # 向算法发送超时信息
+            self.extras["episode"]["max_command_x"] = self.command_ranges["lin_vel_x"][1]
+        # send timeout info to the algorithm
         if self.cfg.env.send_timeouts:
             self.extras["time_outs"] = self.time_out_buf
         
     def compute_reward(self):
-        """ 
-        计算奖励函数
-        调用所有非零权重的奖励函数（在 self._prepare_reward_function() 中处理）
-        将每个奖励项累加到 episode 总和和总奖励中
+        """ Compute rewards
+            Calls each reward function which had a non-zero scale (processed in self._prepare_reward_function())
+            adds each terms to the episode sums and to the total reward
         """
-        
-        # ========== 步骤1：初始化奖励缓冲区 ==========
-        # self.rew_buf: 形状为 [num_envs] 的张量，存储每个环境的总奖励
-        # 每个时间步开始时重置为0，然后累加各项奖励reward_names
         self.rew_buf[:] = 0.
-        
-        # ========== 步骤2：计算并累加所有奖励项 ==========
-        # 遍历所有已注册的奖励函数（权重非零的奖励项）
-        # self.reward_functions: 奖励函数列表，例如 [_reward_lin_vel_z, _reward_orientation, ...]
-        # self.reward_names: 奖励名称列表，例如 ['lin_vel_z', 'orientation', ...]
-        # self.reward_scales: 奖励权重字典，例如 {'lin_vel_z': -2.0, 'orientation': -1.0, ...}
+        # print("len_reward=",len(self.reward_functions))
         for i in range(len(self.reward_functions)):
-            # 获取当前奖励项的名称
             name = self.reward_names[i]
-            
-            # 调用奖励函数并乘以权重
-            # reward_functions[i](): 调用奖励函数，返回形状为 [num_envs] 的张量
-            # reward_scales[name]: 该奖励项的权重（可正可负）
-            # 例如：_reward_lin_vel_z() 返回 [0.1, 0.05, 0.2, ...]，权重为 -2.0
-            #       则 rew = [0.1, 0.05, 0.2, ...] * (-2.0) = [-0.2, -0.1, -0.4, ...]
             rew = self.reward_functions[i]() * self.reward_scales[name]
-            
-            # 累加到总奖励缓冲区
-            # 每个环境的总奖励 = 所有奖励项的加权和
             self.rew_buf += rew
-            
-            # 累加到 episode 奖励统计（用于日志记录和分析）
-            # 排除特殊的统计奖励项（success_rate 和 complete_rate）
-            # 修正逻辑错误：应该是 and 而不是 or
-            if name != "success_rate" or name != "complete_rate":
-                # episode_sums: 每个奖励项在当前 episode 中的累计值
-                # 用于在 episode 结束时计算平均奖励和记录日志
+            if name !="success_rate" or name !="complete_rate":
                 self.episode_sums[name] += rew
                 
-        # ========== 步骤3：奖励裁剪（可选）==========        
-        # 如果配置了只使用正奖励，则将负奖励裁剪为0
-        # 这种设置可以避免智能体学到"不做任何动作"的消极策略
         if self.cfg.rewards.only_positive_rewards:
-            # torch.clip(x, min=0.): 将所有负值设为0，正值保持不变
-            # 例如：[-0.5, 0.3, -0.1, 0.8] → [0.0, 0.3, 0.0, 0.8]
             self.rew_buf[:] = torch.clip(self.rew_buf[:], min=0.)
         
-        # ========== 步骤4：添加终止奖励（在裁剪后）==========
-        # 终止奖励是特殊的奖励项，只在 episode 结束时给出
-        # 在奖励裁剪后添加，确保终止奖励（通常是负值）不被裁剪掉
+        # add termination reward after clipping
         if "termination" in self.reward_scales:
-            # _reward_termination(): 计算终止奖励
-            # 通常在机器人摔倒、超时、或违反约束时给出负奖励
             rew = self._reward_termination() * self.reward_scales["termination"]
-            
-            # 添加到总奖励（不受 only_positive_rewards 影响）
             self.rew_buf += rew
-            
-            # 累加到 episode 统计
             self.episode_sums["termination"] += rew
-            
-        # ========== 奖励计算示例 ==========
-        """
-        假设某个时间步的奖励计算：
-        
-        奖励项及其值：
-        - lin_vel_z: 0.1 (垂直速度偏离惩罚)
-        - orientation: 0.05 (姿态偏离惩罚) 
-        - tracking_lin_vel: 0.8 (线速度跟踪奖励)
-        - torques: 0.2 (力矩惩罚)
-        
-        权重设置：
-        - lin_vel_z: -2.0 (惩罚权重)
-        - orientation: -1.0 (惩罚权重)
-        - tracking_lin_vel: 1.5 (奖励权重)
-        - torques: -0.1 (小惩罚权重)
-        
-        计算过程：
-        1. rew_buf = 0
-        2. rew_buf += 0.1 * (-2.0) = -0.2
-        3. rew_buf += 0.05 * (-1.0) = -0.25
-        4. rew_buf += 0.8 * 1.5 = 0.95  
-        5. rew_buf += 0.2 * (-0.1) = 0.93
-        
-        最终总奖励：0.93
-        
-        如果 only_positive_rewards=True 且总奖励为负，则会被裁剪为0
-        """
     
     def compute_observations(self):
         """ 
-        计算观测值（本体感知）
-        组装机器人的感受器观测，包括IMU、关节状态、命令信息、接触状态等
-        这些观测将作为强化学习策略网络的输入
+        Computes observations
+        即本体感知
         """
-        
-        # ========== 步骤1：计算IMU观测（惯性测量单元）==========
-        # 提取机器人的姿态信息，只包含roll和pitch角度
-        # 不包含yaw角是因为朝向信息通过其他方式提供（delta_yaw）
-        # imu_obs: 形状为 [num_envs, 2] 的张量
-        # self.roll: 滚转角，绕X轴旋转，范围 [-π, π]
-        # self.pitch: 俯仰角，绕Y轴旋转，范围 [-π, π]
         imu_obs = torch.stack((self.roll, self.pitch), dim=1)
         self.delta_yaw = self.target_yaw - self.yaw
         self.delta_next_yaw = self.next_target_yaw - self.yaw
-        # ========== 步骤2：定期更新朝向误差信息 ==========
-        # 每5个时间步更新一次朝向误差，减少计算开销
+        
         if self.global_counter % 5 == 0:
             # 添加调试信息
-            print("Robot position:", self.root_states[0, :2])  # 机器人位置 - 世界坐标系
-            print("Env origin:", self.env_origins[0, :2])      # 环境原点 - 世界坐标系
-            print("Base init state:", self.base_init_state[:2]) # 基础初始状态 - 相对环境原点坐标系
-            print("Current goal (relative):", self.cur_goals[0, :2])      # 当前目标点 - 相对环境原点坐标系
-            print("Next goal (relative):", self.next_goals[0, :2])        # 下一个目标点 - 相对环境原点坐标系
+            # print("Robot position:", self.root_states[0, :2])  # 机器人位置 - 世界坐标系
+            # print("Env origin:", self.env_origins[0, :2])      # 环境原点 - 世界坐标系
+            # print("Base init state:", self.base_init_state[:2]) # 基础初始状态 - 相对环境原点坐标系
+            # print("Current goal (relative):", self.cur_goals[0, :2])      # 当前目标点 - 相对环境原点坐标系
+            # print("Next goal (relative):", self.next_goals[0, :2])        # 下一个目标点 - 相对环境原点坐标系
             print("Current goal (world):", self.cur_goals[0, :2] + self.env_origins[0, :2])      # 当前目标点 - 世界坐标系
             print("Next goal (world):", self.next_goals[0, :2] + self.env_origins[0, :2])        # 下一个目标点 - 世界坐标系
-            print("Target pos rel:", self.target_pos_rel[0])   # 相对位置向量 - 机器人本体坐标系
+            # print("Target pos rel:", self.target_pos_rel[0])   # 相对位置向量 - 机器人本体坐标系
             print("Robot yaw:", self.yaw[0])                   # 机器人当前朝向 - 世界坐标系
             print("Target yaw:", self.target_yaw[0])           # 目标朝向 - 世界坐标系
             print("self.delta_yaw=",self.delta_yaw[0])
@@ -669,244 +527,96 @@ class HumanoidRobot(BaseTask):
             print("Linear velocity command X:", self.commands[0, 0])  # X方向线速度指令 - 机器人本体坐标系
             print("Angular velocity command Yaw:", self.commands[0, 2])  # Z轴角速度指令 - 机器人本体坐标系
             print("Heading command:", self.commands[0, 3])  # 朝向指令 - 世界坐标系
-        
-        # ========== 步骤3：组装本体感受观测向量 ==========
-        # 将各种传感器信息拼接成一个观测向量
-        obs_buf = torch.cat((
-            # 3维：基座角速度（本体坐标系）
-            # 乘以缩放因子进行归一化，提高训练稳定性
-            self.base_ang_vel * self.obs_scales.ang_vel,   # [num_envs, 3]
             
-            # 2维：IMU姿态信息（roll, pitch）
-            # 不包含yaw是因为朝向通过delta_yaw提供
-            imu_obs,    # [num_envs, 2]
-            
-            # 1维：占位符（暂时不使用的朝向误差）
-            # 乘以0表示该信息被屏蔽，可能用于调试或实验
-            0 * self.delta_yaw[:, None],  # [num_envs, 1]
-            
-            # 1维：当前目标点朝向误差
-            # 告诉机器人应该朝哪个方向转动才能面向目标点
-            self.delta_yaw[:, None],  # [num_envs, 1]
-            
-            # 1维：下一个目标点朝向误差  
-            # 提供更远的导航信息，帮助路径规划
-            self.delta_next_yaw[:, None],  # [num_envs, 1]
-            
-            # 2维：占位符（暂时不使用的速度命令）
-            # 原本可能包含前向和侧向速度命令
-            0 * self.commands[:, 0:2],  # [num_envs, 2]
-            
-            # 1维：前向速度命令
-            # 告诉机器人应该以多快的速度前进
-            self.commands[:, 0:1],  # [num_envs, 1]
-            
-            # 2维：环境类型编码（one-hot）
-            # 区分不同类型的地形或任务
-            # env_class=17可能表示特殊的地形类型
-            (self.env_class != 17).float()[:, None],  # [num_envs, 1] 非17类型
-            (self.env_class == 17).float()[:, None],   # [num_envs, 1] 17类型
-            
-            # 19维：关节位置偏差（对于H1机器人）
-            # (当前关节位置 - 默认关节位置) × 缩放因子
-            # 告诉策略网络关节偏离中性位置的程度
-            (self.dof_pos - self.default_dof_pos_all) * self.obs_scales.dof_pos,  # [num_envs, 19]
-            
-            # 19维：关节速度（对于H1机器人）
-            # 乘以缩放因子进行归一化
-            self.dof_vel * self.obs_scales.dof_vel,  # [num_envs, 19]
-            
-            # 19维：上一步的动作命令（对于H1机器人）
-            # 提供动作历史信息，有助于动作平滑性
-            self.action_history_buf[:, -1],  # [num_envs, 19]
-            
-            # 2维：脚部接触状态
-            # contact_filt: 布尔类型的接触状态，转换为float并减去0.5
-            # 将[0,1]映射到[-0.5,0.5]，使数据以0为中心
-            self.contact_filt.float() - 0.5,  # [num_envs, 2]
-        ), dim=-1)  # 沿最后一个维度拼接
-        
-        # ========== 步骤4：构建特权观测（仿真中可获得，现实中不可获得）==========
-        
-        # 显式特权信息：机器人的线速度（本体坐标系）
-        # 在现实中需要通过状态估计获得，仿真中可以直接读取
-        # 重复3次可能是为了匹配某种网络结构的输入维度要求
-        priv_explicit = torch.cat((
-            self.base_lin_vel * self.obs_scales.lin_vel,  # [num_envs, 3] 实际线速度
-            0 * self.base_lin_vel,                        # [num_envs, 3] 占位符
-            0 * self.base_lin_vel,                        # [num_envs, 3] 占位符
-        ), dim=-1)  # 总共 [num_envs, 9]
-        
-        # 潜在特权信息：物理参数（域随机化参数）
-        # 这些参数在现实中很难准确获得，但在仿真中已知
+
+        obs_buf = torch.cat((#skill_vector, 
+                            self.base_ang_vel  * self.obs_scales.ang_vel,   #[1,3] # 3
+                            imu_obs,    #[1,2]  2 只包含roll和pitch
+                            0*self.delta_yaw[:, None], # 1
+                            self.delta_yaw[:, None], # 1
+                            self.delta_next_yaw[:, None],  # 1
+                            0*self.commands[:, 0:2],  # 2
+                            self.commands[:, 0:1],  #[1,1]  # 1
+                            (self.env_class != 17).float()[:, None],  #1
+                            (self.env_class == 17).float()[:, None], # 1
+                            (self.dof_pos - self.default_dof_pos_all) * self.obs_scales.dof_pos, # h1:19
+                            self.dof_vel * self.obs_scales.dof_vel,  # h1:19
+                            self.action_history_buf[:, -1], # h1:19
+                            self.contact_filt.float()-0.5, # 2
+                            ),dim=-1)
+
+        priv_explicit = torch.cat((self.base_lin_vel * self.obs_scales.lin_vel,
+                                   0 * self.base_lin_vel,
+                                   0 * self.base_lin_vel), dim=-1)
         priv_latent = torch.cat((
-            self.mass_params_tensor,      # [num_envs, 4] 质量和质心参数
-            self.friction_coeffs_tensor,  # [num_envs, 1] 摩擦系数
-            self.motor_strength[0] - 1,   # [num_envs, 19] 电机强度参数P（减1归一化）
-            self.motor_strength[1] - 1    # [num_envs, 19] 电机强度参数D（减1归一化）
-        ), dim=-1)  # 总共 [num_envs, 4+1+19+19=43]
-        
-        # ========== 步骤5：组装完整观测向量 ==========
+            self.mass_params_tensor,
+            self.friction_coeffs_tensor,
+            self.motor_strength[0] - 1, 
+            self.motor_strength[1] - 1
+        ), dim=-1)
         if self.cfg.terrain.measure_heights:
-            # 计算相对地形高度
-            # root_states[:, 2]: 机器人当前高度
-            # 0.3: 参考高度偏移
-            # measured_heights: 周围地形高度采样点
-            # clip到[-1,1]: 限制高度差范围，提高训练稳定性
             heights = torch.clip(self.root_states[:, 2].unsqueeze(1) - 0.3 - self.measured_heights, -1, 1.)
             
-            # 拼接所有观测：本体感受 + 地形高度 + 特权观测 + 历史观测
-            self.obs_buf = torch.cat([
-                obs_buf,                                           # 本体感受观测
-                heights,                                           # 地形高度信息
-                priv_explicit,                                     # 显式特权观测
-                priv_latent,                                       # 潜在特权观测
-                self.obs_history_buf.view(self.num_envs, -1)      # 历史观测（展平）
-            ], dim=-1)
+            self.obs_buf = torch.cat([obs_buf, heights, priv_explicit, priv_latent, self.obs_history_buf.view(self.num_envs, -1)], dim=-1)
         else:
-            # 不使用地形高度时的观测拼接
-            self.obs_buf = torch.cat([
-                obs_buf,                                           # 本体感受观测
-                priv_explicit,                                     # 显式特权观测
-                priv_latent,                                       # 潜在特权观测
-                self.obs_history_buf.view(self.num_envs, -1)      # 历史观测（展平）
-            ], dim=-1)
-        
-        # ========== 步骤6：屏蔽特定观测维度 ==========
-        # 将第6-7维（索引6:8）设为0，可能是为了屏蔽某些不需要的信息
-        # 这可能对应于之前被乘以0的命令维度
+            self.obs_buf = torch.cat([obs_buf, priv_explicit, priv_latent, self.obs_history_buf.view(self.num_envs, -1)], dim=-1)
         obs_buf[:, 6:8] = 0  
 
-        # ========== 步骤7：更新观测历史缓冲区 ==========
-        # 维护一个滑动窗口的观测历史，用于提供时序信息
         self.obs_history_buf = torch.where(
-            # 条件：episode长度<=1（刚开始或刚重置）
             (self.episode_length_buf <= 1)[:, None, None], 
-            # 真值：用当前观测填充整个历史缓冲区
             torch.stack([obs_buf] * self.cfg.env.history_len, dim=1),
-            # 假值：滑动窗口更新（移除最旧的，添加最新的）
             torch.cat([
-                self.obs_history_buf[:, 1:],  # 移除最旧的观测
-                obs_buf.unsqueeze(1)          # 添加当前观测
+                self.obs_history_buf[:, 1:],
+                obs_buf.unsqueeze(1)
             ], dim=1)
         )
 
-        # ========== 步骤8：更新接触历史缓冲区 ==========
-        # 维护脚部接触状态的历史信息
         self.contact_buf = torch.where(
-            # 条件：episode长度<=1（刚开始或刚重置）
             (self.episode_length_buf <= 1)[:, None, None], 
-            # 真值：用当前接触状态填充整个接触缓冲区
             torch.stack([self.contact_filt.float()] * self.cfg.env.contact_buf_len, dim=1),
-            # 假值：滑动窗口更新
             torch.cat([
-                self.contact_buf[:, 1:],                    # 移除最旧的接触状态
-                self.contact_filt.float().unsqueeze(1)     # 添加当前接触状态
+                self.contact_buf[:, 1:],
+                self.contact_filt.float().unsqueeze(1)
             ], dim=1)
         )
         
-        # ========== 观测向量维度总结 ==========
-        """
-        最终观测向量的组成（以H1机器人为例）：
-        
-        本体感受观测 obs_buf：
-        - 角速度: 3维
-        - IMU姿态: 2维 (roll, pitch)
-        - 朝向信息: 3维 (占位符1 + delta_yaw + delta_next_yaw)
-        - 速度命令: 3维 (占位符2 + 前向速度命令1)
-        - 环境类型: 2维 (one-hot编码)
-        - 关节位置: 19维
-        - 关节速度: 19维  
-        - 历史动作: 19维
-        - 接触状态: 2维
-        小计: 72维
-        
-        特权观测：
-        - 显式特权: 9维 (线速度相关)
-        - 潜在特权: 43维 (物理参数)
-        小计: 52维
-        
-        地形高度: 396维 (如果启用)
-        历史观测: 72×history_len 维
-        
-        总维度: 72 + 52 + 396 + 72×history_len (具体取决于配置)
-        """
+        # current_complexity = self._analyze_terrain_complexity()  # shape: [num_envs]
+        # ptr = self.terrain_complexity_ptr % self.terrain_complexity_history.shape[1]
+        # self.terrain_complexity_history[torch.arange(self.num_envs), ptr] = current_complexity
+        # self.terrain_complexity_ptr += 1
             
     def get_noisy_measurement(self, x, scale):
-        """
-        为传感器测量值添加噪声
-        
-        在真实机器人中，传感器读数总是包含噪声。为了提高策略的鲁棒性，
-        在仿真中模拟这种噪声是很重要的。
-        
-        Args:
-            x (torch.Tensor): 原始测量值
-            scale (float): 噪声缩放因子
-            
-        Returns:
-            torch.Tensor: 添加噪声后的测量值
-        """
         if self.cfg.noise.add_noise:
-            # 生成[-1, 1]范围内的均匀随机噪声，然后乘以缩放因子和噪声级别
-            noise = (2.0 * torch.rand_like(x) - 1) * scale * self.cfg.noise.noise_level
-            x = x + noise
+            x = x + (2.0 * torch.rand_like(x) - 1) * scale * self.cfg.noise.noise_level
         return x
 
     def create_sim(self):
-        """ 
-        创建仿真环境、地形和机器人环境
-        
-        这个方法是环境初始化的核心，包括以下步骤：
-        1. 设置仿真的基本参数（坐标轴、图形设备等）
-        2. 创建Isaac Gym仿真实例
-        3. 根据配置创建地形（平面或复杂网格地形）
-        4. 创建所有机器人环境实例
+        """ Creates simulation, terrain and evironments
         """
-        # 设置向上轴索引：2表示z轴向上，1表示y轴向上 -> 需要相应调整重力方向
-        self.up_axis_idx = 2
-        
-        # 如果使用深度相机，即使在无头模式下也需要图形设备ID
+        self.up_axis_idx = 2 # 2 for z, 1 for y -> adapt gravity accordingly
         if self.cfg.depth.use_camera:
-            self.graphics_device_id = self.sim_device_id
-        
-        # 创建Isaac Gym仿真实例
+            self.graphics_device_id = self.sim_device_id  # required in headless mode
         self.sim = self.gym.create_sim(self.sim_device_id, self.graphics_device_id, self.physics_engine, self.sim_params)
 
-        # 开始计时，用于测量地形创建时间
         start = time()
         print("*"*80)
-        
-        # 获取地形网格类型配置
         mesh_type = terrain_config.mesh_type
 
-        # 根据地形类型创建不同的地面
         if mesh_type=='None':
-            # 创建简单的平面地面
             self._create_ground_plane()
         else:
-            # 创建复杂的网格地形（如山丘、台阶、障碍物等）
-            self.terrain = Terrain(self.num_envs)  # 初始化地形生成器
-            self._create_trimesh()                 # 创建三角网格地形
+            self.terrain = Terrain(self.num_envs)
+            self._create_trimesh()
 
-        # 打印地形创建完成信息和耗时
         print("Finished creating ground. Time taken {:.2f} s".format(time() - start))
         print("*"*80)
-        
-        # 创建所有机器人环境实例
         self._create_envs()
 
     def set_camera(self, position, lookat):
-        """ 
-        设置相机位置和朝向
-        
-        Args:
-            position (list): 相机位置坐标 [x, y, z]
-            lookat (list): 相机朝向的目标点坐标 [x, y, z]
+        """ Set camera position and direction
         """
-        # 将Python列表转换为Isaac Gym的Vec3格式
-        cam_pos = gymapi.Vec3(position[0], position[1], position[2])      # 相机位置
-        cam_target = gymapi.Vec3(lookat[0], lookat[1], lookat[2])         # 相机目标点
-        # 设置查看器相机的位置和朝向
+        cam_pos = gymapi.Vec3(position[0], position[1], position[2])
+        cam_target = gymapi.Vec3(lookat[0], lookat[1], lookat[2])
         self.gym.viewer_camera_look_at(self.viewer, None, cam_pos, cam_target)
 
     #------------- Callbacks --------------
@@ -980,177 +690,96 @@ class HumanoidRobot(BaseTask):
         return props, mass_params
     
     def _post_physics_step_callback(self):
-        """ 
-        物理步骤后的回调函数
-        
-        在计算终止条件、奖励和观测之前调用的回调函数。
-        默认行为包括：
-        1. 根据目标和朝向计算角速度命令
-        2. 计算测量的地形高度
-        3. 随机推动机器人（域随机化）
-        4. 重新采样运动命令
+        """ Callback called before computing terminations, rewards, and observations
+            Default behaviour: Compute ang vel command based on target and heading, compute measured terrain heights and randomly push robots
         """
-        
-        # 检查哪些环境需要重新采样命令（基于重采样时间间隔）
-        env_ids = (self.episode_length_buf % int(self.cfg.commands.resampling_time / self.dt)==0)
-        self._resample_commands(env_ids.nonzero(as_tuple=False).flatten())  # 为需要的环境重新采样命令
-
-        # 🎯 朝向命令模式处理（heading_command = True）
-        # if self.cfg.commands.heading_command:
-        #     """
-        #     朝向命令模式说明：
-            
-        #     ❓ 您的疑问解答：
-        #     1. 是否启用：✅ 已启用（base_config中 heading_command = True）
-        #     2. 角速度来源：并非直接来自目标点，而是来自随机采样的目标朝向
-        #     3. 目标点的作用：用于奖励计算和观测，不直接影响运动命令
-            
-        #     🔄 工作流程：
-        #     1. _resample_commands(): 随机采样目标朝向 → commands[:, 3]
-        #     2. 此处：根据朝向误差计算角速度 → commands[:, 2]
-        #     3. _update_goals(): 计算目标点朝向 → self.target_yaw（用于奖励，不覆盖commands）
-            
-        #     🎯 设计理念：
-        #     - 目标朝向（commands[:, 3]）：高级导航指令，可以是任意方向
-        #     - 目标点朝向（self.target_yaw）：具体路径导航，用于奖励和观测
-        #     - 机器人需要学会在指定朝向下，同时导航到目标点
-        #     """
-            
-        #     # ========== 步骤1：计算机器人当前的实际朝向 ==========
-            
-        #     # 1.1 将机器人本体坐标系的前向向量转换到世界坐标系
-        #     # self.forward_vec = [1, 0, 0] 表示机器人本体的前向（X轴正方向）
-        #     # self.base_quat 是机器人当前的姿态四元数，形状: [num_envs, 4]
-        #     # 例如：如果机器人绕Z轴旋转了90度，四元数为 [0, 0, sin(π/4), cos(π/4)]
-        #     forward = quat_apply(self.base_quat, self.forward_vec)
-        #     # 结果示例：如果机器人朝向Y轴正方向，forward ≈ [0, 1, 0]
-            
-        #     # 1.2 从3D前向向量计算2D偏航角
-        #     # 使用atan2计算向量在XY平面的角度，范围 [-π, π]
-        #     # atan2(y, x) 返回从X轴到点(x,y)的角度
-        #     heading = torch.atan2(forward[:, 1], forward[:, 0])
-        #     # 例子：
-        #     # - forward = [1, 0, 0] → heading = atan2(0, 1) = 0 rad (朝向X轴正方向)
-        #     # - forward = [0, 1, 0] → heading = atan2(1, 0) = π/2 rad (朝向Y轴正方向)  
-        #     # - forward = [-1, 0, 0] → heading = atan2(0, -1) = π rad (朝向X轴负方向)
-        #     # - forward = [0, -1, 0] → heading = atan2(-1, 0) = -π/2 rad (朝向Y轴负方向)
-            
-        #     # ========== 步骤2：计算朝向误差和角速度命令 ==========
-            
-        #     # 2.1 计算朝向误差
-        #     # self.commands[:, 3] 是目标朝向角度（在_resample_commands中随机采样）
-        #     # 例如：目标朝向 = π/4 rad (45度)，当前朝向 = 0 rad (0度)
-        #     heading_error = self.commands[:, 3] - heading
-        #     # heading_error = π/4 - 0 = π/4 rad (需要向左转45度)
-            
-        #     # 2.2 将角度误差限制在 [-π, π] 范围内
-        #     # 避免出现 ±2π 的大角度跳跃，选择最短的旋转路径
-        #     heading_error_wrapped = wrap_to_pi(heading_error)
-        #     # 例子：
-        #     # - 如果误差 = 1.5π，wrap后 = -0.5π (向右转90度比向左转270度更短)
-        #     # - 如果误差 = -1.5π，wrap后 = 0.5π (向左转90度比向右转270度更短)
-            
-        #     # 2.3 应用比例控制器计算角速度
-        #     # 0.8 是控制增益Kp，决定响应速度和稳定性
-        #     angular_velocity = 0.8 * heading_error_wrapped
-        #     # 例如：heading_error = π/4，则 angular_velocity = 0.8 * π/4 ≈ 0.628 rad/s
-            
-        #     # 2.4 限制角速度命令的最大值
-        #     # 防止过大的转向速度导致机器人失控或不稳定
-        #     self.commands[:, 2] = torch.clip(angular_velocity, -1.0, 1.0)
-        #     # 如果计算出的角速度 > 1.0 rad/s，则限制为 1.0 rad/s
-        #     # 如果计算出的角速度 < -1.0 rad/s，则限制为 -1.0 rad/s
-            
-        #     # ========== 步骤3：死区处理（避免微小抖动）==========
-            
-        #     # 3.1 设置角速度命令的最小阈值
-        #     # 当角速度命令太小时，设为0，避免不必要的微小转动
-        #     # self.cfg.commands.ang_vel_clip 通常设为 0.1 rad/s
-        #     small_command_mask = torch.abs(self.commands[:, 2]) <= self.cfg.commands.ang_vel_clip
-        #     self.commands[:, 2] = torch.where(small_command_mask, 
-        #                                     torch.zeros_like(self.commands[:, 2]), 
-        #                                     self.commands[:, 2])
-        #     # 等价于：self.commands[:, 2] *= torch.abs(self.commands[:, 2]) > self.cfg.commands.ang_vel_clip
-            
-        #     # ========== 完整数值计算示例 ==========
-        #     """
-        #     假设有一个机器人：
-            
-        #     初始状态：
-        #     - 当前朝向：0 rad (朝向X轴正方向)
-        #     - 目标朝向：π/2 rad (朝向Y轴正方向，即向左转90度)
-        #     - 控制增益：0.8
-        #     - 角速度限制：[-1.0, 1.0] rad/s
-        #     - 死区阈值：0.1 rad/s
-            
-        #     计算过程：
-        #     1. heading_error = π/2 - 0 = π/2 ≈ 1.57 rad
-        #     2. wrap_to_pi(1.57) = 1.57 rad (已在范围内)
-        #     3. angular_velocity = 0.8 × 1.57 ≈ 1.256 rad/s
-        #     4. clip到[-1,1]: min(max(1.256, -1), 1) = 1.0 rad/s
-        #     5. 死区检查: |1.0| > 0.1，保持 1.0 rad/s
-            
-        #     结果：commands[:, 2] = 1.0 rad/s (最大向左转速度)
-            
-        #     随着机器人转动，heading逐渐接近π/2：
-        #     - 当heading = π/4时，误差 = π/2 - π/4 = π/4，角速度 = 0.8×π/4 ≈ 0.628 rad/s
-        #     - 当heading = π/2-0.1时，误差 ≈ 0.1，角速度 = 0.8×0.1 = 0.08 rad/s < 0.1，设为0
-        #     - 机器人停止转动，达到目标朝向
-        #     """
-            
-        #     # 计算机器人当前的前向方向向量（世界坐标系）
-        #     # forward: 形状为 [num_envs, 3] 的张量，表示每个机器人在世界坐标系中的实际前进方向
-        #     # 通过四元数旋转将机器人本体坐标系的前向向量 [1,0,0] 转换到世界坐标系
-        #     # self.base_quat: 机器人基座的四元数姿态，形状为 [num_envs, 4]
-        #     # self.forward_vec: 机器人本体前向向量 [1,0,0]，形状为 [num_envs, 3]
-        #     forward = quat_apply(self.base_quat, self.forward_vec)
-            
-        #     # 计算当前朝向角度（偏航角）
-        #     # heading: 形状为 [num_envs] 的张量，单位为弧度，范围 [-π, π]
-        #     # 使用 atan2 函数计算前向向量在世界坐标系 XY 平面的角度
-        #     # forward[:, 1]: Y 方向分量，forward[:, 0]: X 方向分量
-        #     # 0 表示朝向正 X 轴方向，π/2 表示朝向正 Y 轴方向
-        #     heading = torch.atan2(forward[:, 1], forward[:, 0])
-            
-        #     # 🧮 核心计算：朝向误差 → 角速度命令
-        #     # target_heading - current_heading = heading_error
-        #     # heading_error * gain = angular_velocity_command
-            
-        #     # 计算角速度命令，实现朝向控制
-        #     # self.commands[:, 2]: 角速度命令，形状为 [num_envs]，单位 rad/s
-        #     # self.commands[:, 3]: 目标朝向角度，在 _resample_commands() 中随机采样
-        #     # wrap_to_pi(): 将角度差限制在 [-π, π] 范围内，避免 ±2π 的大角度跳跃
-        #     # 0.8: 角速度控制增益（比例控制器增益），控制转向的敏感度和稳定性
-        #     #      - 增益过大：转向过于敏感，可能导致震荡
-        #     #      - 增益过小：转向反应迟钝，难以跟踪目标朝向
-        #     # torch.clip(-1., 1.): 将角速度命令限制在 [-1, 1] rad/s 范围内，防止过大的转向速度
-        #     self.commands[:, 2] = torch.clip(0.8*wrap_to_pi(self.commands[:, 3] - heading), -1., 1.)
-            
-        #     # 角速度命令的死区处理（避免微小抖动）
-        #     # self.cfg.commands.ang_vel_clip: 角速度命令的最小阈值，通常为 0.1 rad/s
-        #     # 当计算出的角速度命令绝对值小于阈值时，将其设为 0
-        #     # 这样可以避免机器人在接近目标朝向时产生不必要的微小转动和抖动
-        #     # 提高控制的稳定性和能耗效率
-        #     self.commands[:, 2] *= torch.abs(self.commands[:, 2]) > self.cfg.commands.ang_vel_clip
-        
-        # 如果启用地形高度测量，定期更新高度数据
+        # 
         if self.cfg.terrain.measure_heights:
             if self.global_counter % self.cfg.depth.update_interval == 0:
-                self.measured_heights, self.measured_heights_data = self._get_heights()  # 获取机器人周围的地形高度
+                self.measured_heights, self.measured_heights_data  = self._get_heights()
         
-        # 如果启用机器人推动（域随机化），定期随机推动机器人
-        if self.cfg.domain_rand.push_robots and (self.common_step_counter % self.cfg.domain_rand.push_interval == 0):
-            self._push_robots()  # 随机施加外力扰动
+        env_ids = (self.episode_length_buf % int(self.cfg.commands.resampling_time / self.dt)==0)
+        self._resample_commands(env_ids.nonzero(as_tuple=False).flatten())
+
+        if self.cfg.domain_rand.push_robots and  (self.common_step_counter % self.cfg.domain_rand.push_interval == 0):
+            self._push_robots()
     
     def _gather_cur_goals(self, future=0):
         return self.env_goals.gather(1, (self.cur_goal_idx[:, None, None]+future).expand(-1, -1, self.env_goals.shape[-1])).squeeze(1)
+    
+    def _get_forward_height_gradient(self):
+        """计算机器人前方的高度梯度，用于判断坡度"""
+        front_x_indices = [3, 4, 5, 6]  # x = 0, 0.15, 0.3, 0.45 的索引
+        front_point_indices = []
+        for x_idx in front_x_indices:
+            for y_idx in range(11):  # 所有y方向
+                front_point_indices.append(x_idx * 11 + y_idx)
 
-    # def _resample_commands(self, env_ids):
-    #     """
-    #     为指定环境重新采样运动命令
-    #     使用智能速度生成策略
-    #     """
-    #     self._resample_commands_intelligent(env_ids)
+        forward_heights = self.measured_heights[:, front_point_indices]
+        # 计算一阶差分
+        gradients = torch.diff(forward_heights, n=1, dim=1)
+        avg_gradient = torch.mean(gradients, dim=1)
+        return avg_gradient  # 返回每个环境的平均坡度指标
+
+    def _analyze_terrain_complexity(self):
+        """分析前方地形复杂度"""
+        # 提取前方高度采样点（机器人前方0-1.2米区域）
+        front_x_indices = [3, 4, 5, 6]  # x = 0, 0.15, 0.3, 0.45 的索引
+        front_point_indices = []
+        for x_idx in front_x_indices:
+            for y_idx in range(11):  # 所有y方向
+                front_point_indices.append(x_idx * 11 + y_idx)
+
+        forward_heights = self.measured_heights[:, front_point_indices]
+        # 计算地形复杂度指标
+        height_variance = torch.var(forward_heights, dim=1)      # 高度方差（起伏程度）
+        height_gradient = torch.max(forward_heights, dim=1)[0] - torch.min(forward_heights, dim=1)[0]  # 高度差
+        height_roughness = torch.mean(torch.abs(torch.diff(forward_heights, dim=1)), dim=1)  # 粗糙度
+        
+        # 综合复杂度评分 [0, 1]
+        complexity = torch.clamp(
+            0.4 * height_variance + 0.4 * height_gradient + 0.2 * height_roughness,
+            0.0, 1.0
+        )
+        return complexity
+    
+    
+    def _generate_adaptive_speed(self, env_ids):
+        """基于地形复杂度生成自适应速度
+        
+        参数:
+            env_ids: 环境ID列表
+            
+        返回:
+            adaptive_speeds: 自适应速度张量
+        """
+        complexity = self._analyze_terrain_complexity()[env_ids]
+        
+        # 获取配置参数，如果没有设置则使用默认值
+        max_speed = getattr(self.cfg, 'max_speed', 1.0)  # 默认最大速度1.5m/s
+        min_speed = getattr(self.cfg, 'min_speed', 0.2)  # 默认最小速度0.2m/s
+        
+        # 计算速度范围和基础速度
+        speed_range_ratio = getattr(self.cfg, 'speed_range_ratio', 0.3)  # 速度范围比例
+        complexity_sensitivity = getattr(self.cfg, 'complexity_sensitivity', 1.0)  # 复杂度敏感度
+        
+        # 基础速度从max_speed到min_speed线性下降
+        base_speed = max_speed - complexity * complexity_sensitivity * (max_speed - min_speed)
+        
+        # 速度范围：简单地形变化大，困难地形变化小
+        speed_range = speed_range_ratio * (1 - complexity) * (max_speed - min_speed)
+        
+        # 在基础速度± 范围内随机采样
+        min_speed_val = torch.clamp(base_speed - speed_range, min_speed, max_speed - 0.1)
+        max_speed_val = torch.clamp(base_speed + speed_range, min_speed + 0.1, max_speed)
+        
+        # 生成随机速度
+        adaptive_speeds = torch.empty((len(env_ids), 1), device=self.device).uniform_(0, 1)
+        adaptive_speeds = min_speed_val.unsqueeze(1) + adaptive_speeds * (max_speed_val.unsqueeze(1) - min_speed_val.unsqueeze(1))
+        adaptive_speeds = adaptive_speeds.squeeze(1)
+        
+        return adaptive_speeds
+    
     def _resample_commands(self, env_ids):
         """智能的命令重采样（替换原有的随机采样），集成heading/ang_vel采样和clip逻辑"""
         # 采样前进速度
@@ -1281,509 +910,365 @@ class HumanoidRobot(BaseTask):
         self.gym.set_actor_root_state_tensor(self.sim, gymtorch.unwrap_tensor(self.root_states))
 
     def _update_terrain_curriculum(self, env_ids):
-        """
-        智能课程学习：结合地形复杂度和移动距离动态调整难度
-        
-        根据机器人的移动距离和地形复杂度自动调整地形难度：
-        - 如果机器人移动距离超过期望的80%，增加难度
-        - 如果机器人移动距离低于期望的40%，降低难度
-        - 完成最高难度的机器人会被随机分配到不同难度
-        
-        Args:
-            env_ids (List[int]): 需要重置的环境ID列表
-        """
+        """简单的课程学习：连续成功3次升级，连续失败2次降级"""
         if not self.init_done:
             return
-
-        # 1. 计算机器人从起始位置移动的距离
-        dis_to_origin = torch.norm(self.root_states[env_ids, :2] - self.env_origins[env_ids, :2], dim=1)
         
-        # 2. 获取平均地形复杂度（使用历史缓冲区）
-        max_steps = 20  # 最多统计最近20步的复杂度
-        ptrs = self.terrain_complexity_ptr[env_ids]
-        history_len = self.terrain_complexity_history.shape[1]
+        # 初始化环境级别的连续成功/失败计数器
+        if not hasattr(self, 'env_consecutive_success'):
+            self.env_consecutive_success = torch.zeros(self.num_envs, dtype=torch.int, device=self.device)
+            self.env_consecutive_failure = torch.zeros(self.num_envs, dtype=torch.int, device=self.device)
         
-        # 计算每个环境的实际可用长度（防止未填满）
-        valid_lens = torch.clamp(ptrs, max=max_steps)
+        # 课程学习参数
+        success_threshold = 3
+        failure_threshold = 2
         
-        # 使用向量化操作计算平均复杂度（避免Python循环）
-        avg_complexity = torch.zeros(len(env_ids), device=self.device)
-        
-        for i, eid in enumerate(env_ids):
-            end = ptrs[i].item()
-            start = max(0, end - valid_lens[i].item())
+        # 检查每个需要重置的环境
+        for env_id in env_ids:
+            env_id = env_id.item()
             
-            # 环形缓冲区处理
-            if end > start:
-                vals = self.terrain_complexity_history[eid, start:end]
+            # 判断这次episode是否成功（到达所有目标点）
+            is_success = self.cur_goal_idx[env_id] >= self.cfg.terrain.num_goals
+            
+            if is_success:
+                # 成功：增加连续成功计数，重置连续失败计数
+                self.env_consecutive_success[env_id] += 1
+                self.env_consecutive_failure[env_id] = 0
+                
+                # 检查是否达到升级条件
+                if self.env_consecutive_success[env_id] >= success_threshold:
+                    self.terrain_levels[env_id] += 1
+                    self.env_consecutive_success[env_id] = 0  # 重置计数器
+                    # print(f"环境 {env_id} 连续成功{success_threshold}次，升级到等级 {self.terrain_levels[env_id]}")
             else:
-                vals = torch.cat([
-                    self.terrain_complexity_history[eid, start:history_len],
-                    self.terrain_complexity_history[eid, 0:end]
-                ])
-            
-            avg_complexity[i] = vals.mean() if vals.numel() > 0 else 0.0
+                # 失败：增加连续失败计数，重置连续成功计数
+                self.env_consecutive_failure[env_id] += 1
+                self.env_consecutive_success[env_id] = 0
+                
+                # 检查是否达到降级条件
+                if self.env_consecutive_failure[env_id] >= failure_threshold:
+                    self.terrain_levels[env_id] -= 1
+                    self.env_consecutive_failure[env_id] = 0  # 重置计数器
+                    # print(f"环境 {env_id} 连续失败{failure_threshold}次，降级到等级 {self.terrain_levels[env_id]}")
         
-        # 3. 综合评估分数：距离 × (1 + 复杂度)
-        performance_score = dis_to_origin * (1 + avg_complexity)
-        threshold = self.commands[env_ids, 0] * self.cfg.env.episode_length_s * 1.2
-        
-        # 4. 晋级/降级判定
-        move_up = performance_score > threshold * 0.8    # 移动距离超过期望的80% → 增加难度
-        move_down = performance_score < threshold * 0.4  # 移动距离低于期望的40% → 降低难度
-        
-        # 5. 更新地形难度级别
-        self.terrain_levels[env_ids] += 1 * move_up - 1 * move_down
-        
-        # 6. 保持难度在合理范围
+        # 保持难度在合理范围
         self.terrain_levels[env_ids] = torch.where(
             self.terrain_levels[env_ids] >= self.max_terrain_level,
             torch.randint_like(self.terrain_levels[env_ids], self.max_terrain_level),
             torch.clip(self.terrain_levels[env_ids], 0)
         )
         
-        # 7. 更新环境类别和目标
+        # 更新环境类别和目标
         self.env_class[env_ids] = self.terrain_class[self.terrain_levels[env_ids], self.terrain_types[env_ids]]
+        self.env_origins[env_ids] = self.terrain_origins[self.terrain_levels[env_ids], self.terrain_types[env_ids]]
         
-        # 8. 更新目标点
         temp = self.terrain_goals[self.terrain_levels, self.terrain_types]
         last_col = temp[:, -1].unsqueeze(1)
         self.env_goals[:] = torch.cat((temp, last_col.repeat(1, self.cfg.env.num_future_goal_obs, 1)), dim=1)[:]
-        
-        # 9. 更新当前和下一个目标点坐标
         self.cur_goals = self._gather_cur_goals()
         self.next_goals = self._gather_cur_goals(future=1)
 
 
     def _init_buffers(self):
+        """ Initialize torch tensors which will contain simulation states and processed quantities
         """
-        初始化PyTorch张量缓冲区
-        创建包含仿真状态和处理量的张量，用于高效的GPU计算
-        """
-        # 从Isaac Gym获取GPU状态张量
-        actor_root_state = self.gym.acquire_actor_root_state_tensor(self.sim)      # 获取机器人根部状态张量
-        dof_state_tensor = self.gym.acquire_dof_state_tensor(self.sim)            # 获取关节状态张量
-        net_contact_forces = self.gym.acquire_net_contact_force_tensor(self.sim)   # 获取接触力张量
-        # force_sensor_tensor = self.gym.acquire_force_sensor_tensor(self.sim)    # 力传感器张量（暂未使用）
-        rigid_body_state_tensor = self.gym.acquire_rigid_body_state_tensor(self.sim)  # 获取刚体状态张量
+        # get gym GPU state tensors
+        actor_root_state = self.gym.acquire_actor_root_state_tensor(self.sim)
+        dof_state_tensor = self.gym.acquire_dof_state_tensor(self.sim)
+        net_contact_forces = self.gym.acquire_net_contact_force_tensor(self.sim)
+        # force_sensor_tensor = self.gym.acquire_force_sensor_tensor(self.sim)
+        rigid_body_state_tensor = self.gym.acquire_rigid_body_state_tensor(self.sim)
 
-        # 刷新张量数据，确保获取最新的仿真状态
-        self.gym.refresh_dof_state_tensor(self.sim)           # 刷新关节状态
-        self.gym.refresh_actor_root_state_tensor(self.sim)    # 刷新根部状态
-        self.gym.refresh_net_contact_force_tensor(self.sim)   # 刷新接触力
-        self.gym.refresh_rigid_body_state_tensor(self.sim)    # 刷新刚体状态
-        # self.gym.refresh_force_sensor_tensor(self.sim)     # 刷新力传感器（暂未使用）
+        self.gym.refresh_dof_state_tensor(self.sim)
+        self.gym.refresh_actor_root_state_tensor(self.sim)
+        self.gym.refresh_net_contact_force_tensor(self.sim)
+        self.gym.refresh_rigid_body_state_tensor(self.sim)
+        # self.gym.refresh_force_sensor_tensor(self.sim)
             
-        # 创建包装张量，便于不同数据切片的访问
-        self.root_states = gymtorch.wrap_tensor(actor_root_state)  # 根部状态：位置、姿态、线速度、角速度
-        # 刚体状态：每个刚体的位置、姿态、线速度、角速度 (13维)
+        # create some wrapper tensors for different slices
+        self.root_states = gymtorch.wrap_tensor(actor_root_state)
         self.rigid_body_states = gymtorch.wrap_tensor(rigid_body_state_tensor).view(self.num_envs, -1, 13)
-        # 关节状态：位置和速度 (2维)
         self.dof_state = gymtorch.wrap_tensor(dof_state_tensor).view(self.num_envs, -1, 2)
 
-        # 创建常用状态的快捷访问
-        self.dof_pos = self.dof_state[...,0]      # 关节位置
-        self.dof_vel = self.dof_state[..., 1]     # 关节速度
-        self.base_quat = self.root_states[:, 3:7] # 基座四元数姿态
+        self.dof_pos = self.dof_state[...,0]
+        self.dof_vel = self.dof_state[..., 1]
+        self.base_quat = self.root_states[:, 3:7]
 
-        # 接触力：每个刚体在xyz轴上的接触力
-        self.contact_forces = gymtorch.wrap_tensor(net_contact_forces).view(self.num_envs, -1, 3)
+        self.contact_forces = gymtorch.wrap_tensor(net_contact_forces).view(self.num_envs, -1, 3) # shape: num_envs, num_bodies, xyz axis
 
-        # 初始化后续使用的数据
-        self.common_step_counter = 0  # 通用步数计数器
-        self.extras = {}              # 额外信息字典
-        
-        # 重力向量：根据上轴方向设置重力方向
+        # initialize some data used later on
+        self.terrain_complexity_history = torch.zeros(self.num_envs, 100, device=self.device)  # 100为历史长度，可自定义
+        self.terrain_complexity_ptr = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        # 动态计算高度采样点数
+        num_height_points = len(self.cfg.terrain.measured_points_x) * len(self.cfg.terrain.measured_points_y)
+        self.measured_heights = torch.zeros((self.num_envs, num_height_points), device=self.device)
+        # self.target_yaw = torch.zeros(self.num_envs, device=self.device)
+        # self.next_target_yaw = torch.zeros(self.num_envs, device=self.device)  
+        self.common_step_counter = 0
+        self.extras = {}
         self.gravity_vec = to_torch(get_axis_params(-1., self.up_axis_idx), device=self.device).repeat((self.num_envs, 1))
-        # 前向向量：机器人前进方向
         self.forward_vec = to_torch([1., 0., 0.], device=self.device).repeat((self.num_envs, 1))
-        
-        # 初始化控制相关张量
-        self.torques = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)  # 关节力矩
-        self.p_gains = torch.zeros(self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)                # 比例增益
-        self.d_gains = torch.zeros(self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)                # 微分增益
-        
-        # 初始化动作相关张量
-        self.actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)      # 当前动作
-        self.last_actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False) # 上一步动作
-        self.last_last_actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False) # 上上步动作
-        
-        # 初始化历史状态张量
-        self.last_dof_vel = torch.zeros_like(self.dof_vel)                    # 上一步关节速度
-        self.last_torques = torch.zeros_like(self.torques)                   # 上一步力矩
-        self.last_root_vel = torch.zeros_like(self.root_states[:, 7:13])     # 上一步根部速度
-        self.last_foot_action = torch.zeros_like(self.rigid_body_states[:, self.feet_indices, :])  # 上一步脚部动作
+        self.torques = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
+        self.p_gains = torch.zeros(self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
+        self.d_gains = torch.zeros(self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
+        self.actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
+        self.last_actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
+        self.last_last_actions = torch.zeros(self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False)
+        self.last_dof_vel = torch.zeros_like(self.dof_vel)
+        self.last_torques = torch.zeros_like(self.torques)
+        self.last_root_vel = torch.zeros_like(self.root_states[:, 7:13])
+        self.last_foot_action = torch.zeros_like(self.rigid_body_states[:, self.feet_indices, :])
+        self.last_contacts = torch.zeros(self.num_envs, len(self.feet_indices), dtype=torch.bool, device=self.device, requires_grad=False)
+        self.last_contacts_filt = torch.zeros(self.num_envs, len(self.feet_indices), dtype=torch.bool, device=self.device, requires_grad=False)
+        self.feet_air_max_height = torch.zeros(self.num_envs, self.feet_indices.shape[0], dtype=torch.float, device=self.device, requires_grad=False)
 
-        # 目标到达计时器
         self.reach_goal_timer = torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
 
-        # 电机强度随机化（域随机化的一部分）
         str_rng = self.cfg.domain_rand.motor_strength_range
         self.motor_strength = (str_rng[1] - str_rng[0]) * torch.rand(2, self.num_envs, self.num_actions, dtype=torch.float, device=self.device, requires_grad=False) + str_rng[0]
-        
-        # 历史编码缓冲区（如果启用）
         if self.cfg.env.history_encoding:
             self.obs_history_buf = torch.zeros(self.num_envs, self.cfg.env.history_len, self.cfg.env.n_proprio, device=self.device, dtype=torch.float)
-        
-        # 动作历史缓冲区（用于动作延迟）
         self.action_history_buf = torch.zeros(self.num_envs, self.cfg.domain_rand.action_buf_len, self.num_dofs, device=self.device, dtype=torch.float)
-        
-        # 接触历史缓冲区
         # self.contact_buf = torch.zeros(self.num_envs, self.cfg.env.contact_buf_len, 4, device=self.device, dtype=torch.float)
         self.contact_buf = torch.zeros(self.num_envs, self.cfg.env.contact_buf_len, 2, device=self.device, dtype=torch.float)
 
-        # 运动命令：线速度x、y和角速度yaw
-        self.commands = torch.zeros(self.num_envs, self.cfg.commands.num_commands, dtype=torch.float, device=self.device, requires_grad=False)
-        # 重新采样所有环境的命令
+        self.commands = torch.zeros(self.num_envs, self.cfg.commands.num_commands, dtype=torch.float, device=self.device, requires_grad=False) # x vel, y vel, yaw vel, heading
         self._resample_commands(torch.arange(self.num_envs, device=self.device, requires_grad=False))
-        # 命令缩放因子
         self.commands_scale = torch.tensor([self.obs_scales.lin_vel, self.obs_scales.lin_vel, self.obs_scales.ang_vel], device=self.device, requires_grad=False,) # TODO change this
-        
-        # 脚部腾空时间和接触状态
-        self.feet_air_time = torch.zeros(self.num_envs, self.feet_indices.shape[0], dtype=torch.float, device=self.device, requires_grad=False)  # 脚部腾空时间
-        self.last_contacts = torch.zeros(self.num_envs, len(self.feet_indices), dtype=torch.bool, device=self.device, requires_grad=False)        # 上一步接触状态
-        
-        # 基座在本体坐标系下的速度
-        self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])   # 线速度
-        self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])  # 角速度
-        # 投影重力（本体坐标系下的重力方向）
+        self.feet_air_time = torch.zeros(self.num_envs, 2, device=self.device, dtype=torch.float)
+        self.last_contacts = torch.zeros(self.num_envs, len(self.feet_indices), dtype=torch.bool, device=self.device, requires_grad=False)
+        self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
+        self.base_ang_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 10:13])
         self.projected_gravity = quat_rotate_inverse(self.base_quat, self.gravity_vec)
-        
-        # 如果启用高度测量，初始化高度采样点
         if self.cfg.terrain.measure_heights:
             self.height_points, self.height_points_data = self._init_height_points()
-        self.measured_heights = 0  # 测量的高度值
-        self.measured_heights = 0  # 重复行（可能是代码错误）
-
-        # 关节位置偏移和PD增益设置
-        self.default_dof_pos = torch.zeros(self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)          # 默认关节位置
-        self.default_dof_pos_all = torch.zeros(self.num_envs, self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)  # 所有环境的默认关节位置
+        # self.measured_heights = 0
         
-        # 遍历所有关节，设置默认位置和PD增益
+
+        # joint positions offsets and PD gains
+        self.default_dof_pos = torch.zeros(self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
+        self.default_dof_pos_all = torch.zeros(self.num_envs, self.num_dof, dtype=torch.float, device=self.device, requires_grad=False)
         for i in range(self.num_dofs):
-            name = self.dof_names[i]  # 关节名称
-            angle = self.cfg.init_state.default_joint_angles[name]  # 从配置获取默认角度
+            name = self.dof_names[i]
+            angle = self.cfg.init_state.default_joint_angles[name]
             self.default_dof_pos[i] = angle
             found = False
-            # 为每个关节设置PD增益
             for dof_name in self.cfg.control.stiffness.keys():
-                if dof_name in name:  # 匹配关节名称
-                    self.p_gains[i] = self.cfg.control.stiffness[dof_name]  # 设置比例增益
-                    self.d_gains[i] = self.cfg.control.damping[dof_name]    # 设置微分增益
+                if dof_name in name:
+                    self.p_gains[i] = self.cfg.control.stiffness[dof_name]
+                    self.d_gains[i] = self.cfg.control.damping[dof_name]
                     found = True
-            if not found:  # 如果没有找到对应的增益设置
+            if not found:
                 self.p_gains[i] = 0.
                 self.d_gains[i] = 0.
                 if self.cfg.control.control_type in ["P", "V"]:
                     print(f"PD gain of joint {name} were not defined, setting them to zero")
-        
-        # 为所有环境复制默认关节位置
-        self.default_dof_pos = self.default_dof_pos.unsqueeze(0)  # 增加批次维度
-        self.default_dof_pos_all[:] = self.default_dof_pos[0]     # 复制到所有环境
+        self.default_dof_pos = self.default_dof_pos.unsqueeze(0)
 
-        # 高度更新间隔设置
-        self.height_update_interval = 1  # 默认每步更新
+        self.default_dof_pos_all[:] = self.default_dof_pos[0]
+
+        self.height_update_interval = 1
         if hasattr(self.cfg.env, "height_update_dt"):
-            # 根据配置的时间间隔计算更新间隔步数
             self.height_update_interval = int(self.cfg.env.height_update_dt / (self.cfg.sim.dt * self.cfg.control.decimation))
 
-        # 如果使用深度相机，初始化深度缓冲区
         if self.cfg.depth.use_camera:
             self.depth_buffer = torch.zeros(self.num_envs,  
-                                            self.cfg.depth.buffer_len,      # 缓冲区长度
-                                            self.cfg.depth.resized[1],      # 图像高度
-                                            self.cfg.depth.resized[0]).to(self.device)  # 图像宽度
-
-        # 添加地形复杂度历史缓冲区初始化
-        self.terrain_complexity_history = torch.zeros(self.num_envs, 100, device=self.device, dtype=torch.float)
-        self.terrain_complexity_ptr = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+                                            self.cfg.depth.buffer_len, 
+                                            self.cfg.depth.resized[1], 
+                                            self.cfg.depth.resized[0]).to(self.device)
 
     def _prepare_reward_function(self):
+        """ Prepares a list of reward functions, whcih will be called to compute the total reward.
+            Looks for self._reward_<REWARD_NAME>, where <REWARD_NAME> are names of all non zero reward scales in the cfg.
         """
-        准备奖励函数列表
-        查找所有非零奖励权重对应的奖励函数，用于计算总奖励
-        函数名格式：self._reward_<REWARD_NAME>，其中<REWARD_NAME>是配置中奖励权重的名称
-        """
-        # 移除零权重的奖励项，并将非零权重乘以时间步长
+        # remove zero scales + multiply non-zero ones by dt
         for key in list(self.reward_scales.keys()):
             scale = self.reward_scales[key]
             if scale==0:
-                self.reward_scales.pop(key)  # 移除零权重项
+                self.reward_scales.pop(key) 
             else:
-                self.reward_scales[key] *= self.dt  # 乘以时间步长进行归一化
-                
-        # 准备奖励函数列表
-        self.reward_functions = []  # 奖励函数列表
-        self.reward_names = []      # 奖励名称列表
-        
+                self.reward_scales[key] *= self.dt
+        # prepare list of functions
+        self.reward_functions = []
+        self.reward_names = []
         for name, scale in self.reward_scales.items():
-            if name=="termination":  # 跳过终止奖励（特殊处理）
+            if name=="termination":
                 continue
             self.reward_names.append(name)
-            name = '_reward_' + name  # 构建函数名
-            # 通过反射获取奖励函数并添加到列表
+            name = '_reward_' + name
             self.reward_functions.append(getattr(self, name))
 
-        # 初始化episode奖励累计器
-        # 为每个奖励项创建累计张量，用于跟踪每个环境的奖励总和
+        # reward episode sums
         self.episode_sums = {name: torch.zeros(self.num_envs, dtype=torch.float, device=self.device, requires_grad=False)
                              for name in self.reward_scales.keys()}
 
     def _create_ground_plane(self):
-        """ 
-        向仿真中添加平面地面，根据配置设置摩擦力和恢复系数
-        
-        创建一个简单的水平平面作为机器人的行走表面。
-        这是最基础的地形类型，适用于基本的步行训练。
+        """ Adds a ground plane to the simulation, sets friction and restitution based on the cfg.
         """
-        # 创建平面参数对象
         plane_params = gymapi.PlaneParams()
-        plane_params.normal = gymapi.Vec3(0.0, 0.0, 1.0)                    # 平面法向量（z轴向上）
-        plane_params.static_friction = self.cfg.terrain.static_friction      # 静摩擦系数
-        plane_params.dynamic_friction = self.cfg.terrain.dynamic_friction    # 动摩擦系数
-        plane_params.restitution = self.cfg.terrain.restitution             # 恢复系数（弹性）
-        
-        # 将地面平面添加到仿真中
+        plane_params.normal = gymapi.Vec3(0.0, 0.0, 1.0)
+        plane_params.static_friction = self.cfg.terrain.static_friction
+        plane_params.dynamic_friction = self.cfg.terrain.dynamic_friction
+        plane_params.restitution = self.cfg.terrain.restitution
         self.gym.add_ground(self.sim, plane_params)
 
     def _create_trimesh(self):
-        """ 
-        向仿真中添加三角网格地形，根据配置设置参数
-        
-        创建复杂的3D地形，包括山丘、台阶、障碍物等。
-        注意：当horizontal_scale很小时，此方法会非常慢。
-        
-        这种地形可以提供更丰富的训练场景，提高机器人的适应性。
+        """ Adds a triangle mesh terrain to the simulation, sets parameters based on the cfg.
+            Very slow when horizontal_scale is small
         """
-        # 创建三角网格参数对象
         tm_params = gymapi.TriangleMeshParams()
-        tm_params.nb_vertices = self.terrain.vertices.shape[0]      # 顶点数量
-        tm_params.nb_triangles = self.terrain.triangles.shape[0]    # 三角形数量
+        tm_params.nb_vertices = self.terrain.vertices.shape[0]
+        tm_params.nb_triangles = self.terrain.triangles.shape[0]
 
-        # 设置地形的位置变换（考虑边界大小）
-        tm_params.transform.p.x = -self.terrain.cfg.border_size     # X轴偏移
-        tm_params.transform.p.y = -self.terrain.cfg.border_size     # Y轴偏移
-        tm_params.transform.p.z = 0.0                               # Z轴偏移（地面高度）
-        
-        # 设置物理属性
-        tm_params.static_friction = self.cfg.terrain.static_friction    # 静摩擦系数
-        tm_params.dynamic_friction = self.cfg.terrain.dynamic_friction  # 动摩擦系数
-        tm_params.restitution = self.cfg.terrain.restitution           # 恢复系数（弹性）
-        
+        tm_params.transform.p.x = -self.terrain.cfg.border_size 
+        tm_params.transform.p.y = -self.terrain.cfg.border_size
+        tm_params.transform.p.z = 0.0
+        tm_params.static_friction = self.cfg.terrain.static_friction
+        tm_params.dynamic_friction = self.cfg.terrain.dynamic_friction
+        tm_params.restitution = self.cfg.terrain.restitution
         print("Adding trimesh to simulation...")
-        # 将三角网格添加到仿真中（顶点和三角形数据需要按C顺序展平）
-        self.gym.add_triangle_mesh(self.sim, 
-                                 self.terrain.vertices.flatten(order='C'), 
-                                 self.terrain.triangles.flatten(order='C'), 
-                                 tm_params)  
+        self.gym.add_triangle_mesh(self.sim, self.terrain.vertices.flatten(order='C'), self.terrain.triangles.flatten(order='C'), tm_params)  
         print("Trimesh added")
-        
-        # 将高度采样数据转换为PyTorch张量并移动到指定设备
         self.height_samples = torch.tensor(self.terrain.heightsamples).view(self.terrain.tot_rows, self.terrain.tot_cols).to(self.device)
-        # 将边缘掩码转换为PyTorch张量（用于检测机器人是否接近地形边缘）
         self.x_edge_mask = torch.tensor(self.terrain.x_edge_mask).view(self.terrain.tot_rows, self.terrain.tot_cols).to(self.device)
 
     def attach_camera(self, i, env_handle, actor_handle):
-        """
-        为指定的机器人环境附加深度相机
-        
-        这个方法在每个机器人上安装一个深度相机，用于视觉感知和观测。
-        相机会跟随机器人移动，提供第一人称视角的深度信息。
-        
-        Args:
-            i (int): 环境索引
-            env_handle: 环境句柄
-            actor_handle: 机器人actor句柄
-        """
         if self.cfg.depth.use_camera:
-            # 获取深度相机配置
             config = self.cfg.depth
-            
-            # 创建相机属性对象
             camera_props = gymapi.CameraProperties()
-            camera_props.width = self.cfg.depth.original[0]           # 图像宽度（像素）
-            camera_props.height = self.cfg.depth.original[1]          # 图像高度（像素）
-            camera_props.enable_tensors = True                        # 启用张量输出（用于GPU加速）
-            camera_horizontal_fov = self.cfg.depth.horizontal_fov     # 水平视野角度
+            camera_props.width = self.cfg.depth.original[0]
+            camera_props.height = self.cfg.depth.original[1]
+            camera_props.enable_tensors = True
+            camera_horizontal_fov = self.cfg.depth.horizontal_fov 
             camera_props.horizontal_fov = camera_horizontal_fov
 
-            # 在环境中创建相机传感器
             camera_handle = self.gym.create_camera_sensor(env_handle, camera_props)
-            self.cam_handles.append(camera_handle)  # 保存相机句柄
+            self.cam_handles.append(camera_handle)
             
-            # 创建相机的本地变换（相对于机器人的位置和姿态）
             local_transform = gymapi.Transform()
             
-            # 设置相机位置（相对于机器人根部）
-            camera_position = np.copy(config.position)  # [x, y, z] 相对位置
-            # 随机化相机俯仰角（增加训练多样性）
+            camera_position = np.copy(config.position)
             camera_angle = np.random.uniform(config.angle[0], config.angle[1])
             
-            # 设置相机的位置和旋转
-            local_transform.p = gymapi.Vec3(*camera_position)  # 位置向量
-            # 设置相机旋转：绕y轴旋转（俯仰角），0表示roll和yaw
+            local_transform.p = gymapi.Vec3(*camera_position)
             local_transform.r = gymapi.Quat.from_euler_zyx(0, np.radians(camera_angle), 0)
-            
-            # 获取机器人根部刚体句柄
             root_handle = self.gym.get_actor_root_rigid_body_handle(env_handle, actor_handle)
 
             # print("rigid_body_names=",self.gym.get_actor_rigid_body_names(env_handle, actor_handle))
 
-            # 将相机附加到机器人根部，使其跟随机器人移动
-            # FOLLOW_TRANSFORM 表示相机会跟随刚体的变换
+            
             self.gym.attach_camera_to_body(camera_handle, env_handle, root_handle, local_transform, gymapi.FOLLOW_TRANSFORM)
         # print("rigid_body_names=",self.gym.get_actor_rigid_body_names(env_handle, actor_handle))
 
     def _create_envs(self):
-        """ 
-        创建所有机器人环境实例
-        
-        这是环境创建的核心方法，执行以下步骤：
-        1. 加载机器人URDF/MJCF资产文件
-        2. 为每个环境：
-           2.1 创建环境实例
-           2.2 调用DOF和刚体形状属性回调函数
-           2.3 使用这些属性创建actor并添加到环境中
-        3. 存储机器人不同部位的索引信息
+        """ Creates environments:
+             1. loads the robot URDF/MJCF asset,
+             2. For each environment
+                2.1 creates the environment, 
+                2.2 calls DOF and Rigid shape properties callbacks,
+                2.3 create actor with these properties and add them to the env
+             3. Store indices of different bodies of the robot
         """
-        # 构建机器人资产文件的完整路径
         asset_path = self.cfg.asset.file.format(LEGGED_GYM_ROOT_DIR=LEGGED_GYM_ROOT_DIR)
-        asset_root = os.path.dirname(asset_path)    # 资产文件所在目录
-        asset_file = os.path.basename(asset_path)   # 资产文件名
+        asset_root = os.path.dirname(asset_path)
+        asset_file = os.path.basename(asset_path)
 
-        # 配置资产加载选项
         asset_options = gymapi.AssetOptions()
-        asset_options.default_dof_drive_mode = self.cfg.asset.default_dof_drive_mode          # 默认DOF驱动模式
-        asset_options.collapse_fixed_joints = self.cfg.asset.collapse_fixed_joints            # 是否合并固定关节
-        asset_options.replace_cylinder_with_capsule = self.cfg.asset.replace_cylinder_with_capsule  # 用胶囊体替换圆柱体
-        asset_options.flip_visual_attachments = self.cfg.asset.flip_visual_attachments        # 是否翻转视觉附件
-        asset_options.fix_base_link = self.cfg.asset.fix_base_link                           # 是否固定基座链接
-        asset_options.density = self.cfg.asset.density                                       # 密度
-        asset_options.angular_damping = self.cfg.asset.angular_damping                       # 角阻尼
-        asset_options.linear_damping = self.cfg.asset.linear_damping                         # 线性阻尼
-        asset_options.max_angular_velocity = self.cfg.asset.max_angular_velocity             # 最大角速度
-        asset_options.max_linear_velocity = self.cfg.asset.max_linear_velocity               # 最大线速度
-        asset_options.armature = self.cfg.asset.armature                                     # 电枢
-        asset_options.thickness = self.cfg.asset.thickness                                   # 厚度
-        asset_options.disable_gravity = self.cfg.asset.disable_gravity                       # 是否禁用重力
+        asset_options.default_dof_drive_mode = self.cfg.asset.default_dof_drive_mode
+        asset_options.collapse_fixed_joints = self.cfg.asset.collapse_fixed_joints
+        asset_options.replace_cylinder_with_capsule = self.cfg.asset.replace_cylinder_with_capsule
+        asset_options.flip_visual_attachments = self.cfg.asset.flip_visual_attachments
+        asset_options.fix_base_link = self.cfg.asset.fix_base_link
+        asset_options.density = self.cfg.asset.density
+        asset_options.angular_damping = self.cfg.asset.angular_damping
+        asset_options.linear_damping = self.cfg.asset.linear_damping
+        asset_options.max_angular_velocity = self.cfg.asset.max_angular_velocity
+        asset_options.max_linear_velocity = self.cfg.asset.max_linear_velocity
+        asset_options.armature = self.cfg.asset.armature
+        asset_options.thickness = self.cfg.asset.thickness
+        asset_options.disable_gravity = self.cfg.asset.disable_gravity
 
-        # 加载机器人资产并获取基本信息
         robot_asset = self.gym.load_asset(self.sim, asset_root, asset_file, asset_options)
-        self.num_dof = self.gym.get_asset_dof_count(robot_asset)              # 获取DOF数量
-        self.num_bodies = self.gym.get_asset_rigid_body_count(robot_asset)    # 获取刚体数量
-        dof_props_asset = self.gym.get_asset_dof_properties(robot_asset)      # 获取DOF属性
-        rigid_shape_props_asset = self.gym.get_asset_rigid_shape_properties(robot_asset)  # 获取刚体形状属性
+        self.num_dof = self.gym.get_asset_dof_count(robot_asset)
+        self.num_bodies = self.gym.get_asset_rigid_body_count(robot_asset)
+        dof_props_asset = self.gym.get_asset_dof_properties(robot_asset)
+        rigid_shape_props_asset = self.gym.get_asset_rigid_shape_properties(robot_asset)
 
-        # 从资产中保存刚体和DOF名称
-        body_names = self.gym.get_asset_rigid_body_names(robot_asset)  # 获取刚体名称列表
-        self.dof_names = self.gym.get_asset_dof_names(robot_asset)     # 获取DOF名称列表
+        # save body names from the asset
+        body_names = self.gym.get_asset_rigid_body_names(robot_asset)
+        self.dof_names = self.gym.get_asset_dof_names(robot_asset)
         # print("DOF names:", self.dof_names)
-        self.num_bodies = len(body_names)    # 刚体数量
-        self.num_dofs = len(self.dof_names)  # DOF数量
+        self.num_bodies = len(body_names)
+        self.num_dofs = len(self.dof_names)
+        feet_names = [s for s in body_names if self.cfg.asset.foot_name in s]
+        knee_names = [s for s in body_names if self.cfg.asset.knee_name in s]
         
-        # 根据配置查找特定部位的名称
-        feet_names = [s for s in body_names if self.cfg.asset.foot_name in s]    # 脚部刚体名称
-        knee_names = [s for s in body_names if self.cfg.asset.knee_name in s]    # 膝盖刚体名称
-        
-        # 查找需要惩罚接触的刚体名称
         penalized_contact_names = []
         for name in self.cfg.asset.penalize_contacts_on:
             penalized_contact_names.extend([s for s in body_names if name in s])
-        
-        # 查找接触后需要终止的刚体名称
         termination_contact_names = []
         for name in self.cfg.asset.terminate_after_contacts_on:
             termination_contact_names.extend([s for s in body_names if name in s])
 
-        # 设置机器人基座的初始状态
         base_init_state_list = self.cfg.init_state.pos + self.cfg.init_state.rot + self.cfg.init_state.lin_vel + self.cfg.init_state.ang_vel
         self.base_init_state = to_torch(base_init_state_list, device=self.device, requires_grad=False)
-        start_pose = gymapi.Transform()                        # 创建起始姿态变换
-        start_pose.p = gymapi.Vec3(*self.base_init_state[:3])  # 设置起始位置
+        start_pose = gymapi.Transform()
+        start_pose.p = gymapi.Vec3(*self.base_init_state[:3])
 
-        # 获取环境原点位置
         self._get_env_origins()
-        env_lower = gymapi.Vec3(0., 0., 0.)  # 环境边界下限
-        env_upper = gymapi.Vec3(0., 0., 0.)  # 环境边界上限
-        
-        # 初始化存储列表和张量
-        self.actor_handles = []    # 存储所有actor句柄
-        self.envs = []            # 存储所有环境句柄
-        self.cam_handles = []     # 存储所有相机句柄
-        self.cam_tensors = []     # 存储所有相机张量
-        # 质量参数张量：每个环境4个参数（质量、质心x、质心y、质心z）
+        env_lower = gymapi.Vec3(0., 0., 0.)
+        env_upper = gymapi.Vec3(0., 0., 0.)
+        self.actor_handles = []
+        self.envs = []
+        self.cam_handles = []
+        self.cam_tensors = []
         self.mass_params_tensor = torch.zeros(self.num_envs, 4, dtype=torch.float, device=self.device, requires_grad=False)
         
         print("Creating env...")
-        # 为每个环境创建机器人实例
         for i in tqdm(range(self.num_envs)):
-            # 创建环境实例
+            # create env instance
             env_handle = self.gym.create_env(self.sim, env_lower, env_upper, int(np.sqrt(self.num_envs)))
-            
-            # 设置机器人起始位置
             pos = self.env_origins[i].clone()
-            
-            # 可选：随机化起始位置
             if self.cfg.env.randomize_start_pos:
                 pos[:2] += torch_rand_float(-1., 1., (2,1), device=self.device).squeeze(1)
-            
-            # 可选：随机化起始偏航角
             if self.cfg.env.randomize_start_yaw:
                 rand_yaw_quat = gymapi.Quat.from_euler_zyx(0., 0., self.cfg.env.rand_yaw_range*np.random.uniform(-1, 1))
                 start_pose.r = rand_yaw_quat
-            
-            # 更新起始姿态位置
             start_pose.p = gymapi.Vec3(*(pos + self.base_init_state[:3]))
 
-            # 处理刚体形状属性（应用域随机化等）
             rigid_shape_props = self._process_rigid_shape_props(rigid_shape_props_asset, i)
             self.gym.set_asset_rigid_shape_properties(robot_asset, rigid_shape_props)
-            
-            # 创建机器人actor
             humanoid_handle = self.gym.create_actor(env_handle, robot_asset, start_pose, "Humanoid", i, self.cfg.asset.self_collisions, 0)
-            
-            # 处理DOF属性（关节刚度、阻尼等）
             dof_props = self._process_dof_props(dof_props_asset, i)
             self.gym.set_actor_dof_properties(env_handle, humanoid_handle, dof_props)
-            
-            # 处理刚体属性（质量、质心等）
             body_props = self.gym.get_actor_rigid_body_properties(env_handle, humanoid_handle)
             body_props, mass_params = self._process_rigid_body_props(body_props, i)
             self.gym.set_actor_rigid_body_properties(env_handle, humanoid_handle, body_props, recomputeInertia=True)
-            
-            # 保存环境和actor句柄
             self.envs.append(env_handle)
             self.actor_handles.append(humanoid_handle)
             
-            # 如果使用深度相机，为此环境附加相机
             self.attach_camera(i, env_handle, humanoid_handle)
 
-            # 保存质量参数到张量
             self.mass_params_tensor[i, :] = torch.from_numpy(mass_params).to(self.device).to(torch.float)
 
-        # 如果启用了摩擦力随机化，将摩擦系数转换为张量
         # print("open=",self.cfg.domain_rand.randomize_friction)
         if self.cfg.domain_rand.randomize_friction:
             self.friction_coeffs_tensor = self.friction_coeffs.to(self.device).to(torch.float).squeeze(-1)
 
         # print("name=",feet_names)
 
-        # 获取脚部刚体的索引
         self.feet_indices = torch.zeros(len(feet_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(feet_names)):
             self.feet_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], feet_names[i])
 
-        # 获取膝盖刚体的索引
         self.knee_indices = torch.zeros(len(knee_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(knee_names)):
             self.knee_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], knee_names[i])
 
-        # 获取需要惩罚接触的刚体索引
         self.penalised_contact_indices = torch.zeros(len(penalized_contact_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(penalized_contact_names)):
             self.penalised_contact_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], penalized_contact_names[i])
 
-        # 获取接触后需要终止的刚体索引
         self.termination_contact_indices = torch.zeros(len(termination_contact_names), dtype=torch.long, device=self.device, requires_grad=False)
         for i in range(len(termination_contact_names)):
             self.termination_contact_indices[i] = self.gym.find_actor_rigid_body_handle(self.envs[0], self.actor_handles[0], termination_contact_names[i])
@@ -1827,51 +1312,24 @@ class HumanoidRobot(BaseTask):
             self.env_goals[:] = torch.cat((temp, last_col.repeat(1, self.cfg.env.num_future_goal_obs, 1)), dim=1)[:]
             self.cur_goals = self._gather_cur_goals()
             self.next_goals = self._gather_cur_goals(future=1)
-
+            
     def _parse_cfg(self, cfg):
-        """
-        解析配置文件，提取并计算关键参数
-        将配置文件中的参数转换为环境运行时需要的格式
-        
-        Args:
-            cfg: 配置对象，包含所有环境和训练参数
-        """
-        # 计算控制时间步长 = 控制频率降采样 × 仿真时间步长
-        # 例如：decimation=4, sim_dt=0.005s → control_dt=0.02s (50Hz控制频率)
         self.dt = self.cfg.control.decimation * self.sim_params.dt
-        
-        # 获取观测值归一化缩放因子
-        # 用于将不同量纲的观测值归一化到相似范围
         self.obs_scales = self.cfg.normalization.obs_scales
-        
-        # 将奖励权重配置转换为字典格式，便于后续处理
         self.reward_scales = class_to_dict(self.cfg.rewards.scales)
-        
-        # 奖励归一化因子（当前设为1，不进行归一化）
-        # 可以设为所有奖励权重之和来归一化总奖励
-        reward_norm_factor = 1  # np.sum(list(self.reward_scales.values()))
-        
-        # 对每个奖励项进行归一化处理
+        reward_norm_factor = 1#np.sum(list(self.reward_scales.values()))
         for rew in self.reward_scales:
             self.reward_scales[rew] = self.reward_scales[rew] / reward_norm_factor
-            
-        # 根据是否启用课程学习选择命令范围
         if self.cfg.commands.curriculum:
-            # 课程学习模式：使用渐进式命令范围
             self.command_ranges = class_to_dict(self.cfg.commands.ranges)
         else:
-            # 固定模式：直接使用最大命令范围
             self.command_ranges = class_to_dict(self.cfg.commands.max_ranges)
 
-        # 设置episode长度参数
-        self.max_episode_length_s = self.cfg.env.episode_length_s  # episode最大时长（秒）
-        # 将时间长度转换为控制步数
+        self.max_episode_length_s = self.cfg.env.episode_length_s
         self.max_episode_length = np.ceil(self.max_episode_length_s / self.dt)
 
-        # 计算域随机化中推力施加的间隔步数
-        # 将时间间隔转换为控制步数间隔
         self.cfg.domain_rand.push_interval = np.ceil(self.cfg.domain_rand.push_interval_s / self.dt)
-
+ 
     def _draw_height_samples(self):
         """ Draws visualizations for dubugging (slows down simulation a lot).
             Default behaviour: draws height measurement points
@@ -1880,8 +1338,8 @@ class HumanoidRobot(BaseTask):
         if not self.terrain.cfg.measure_heights:
             return
         self.gym.refresh_rigid_body_state_tensor(self.sim)
-        sphere_geom = gymutil.WireframeSphereGeometry(0.02, 32, 32, None, color=(255, 0, 0))
-        i = self.lookat_id  
+        sphere_geom = gymutil.WireframeSphereGeometry(0.02, 32,   32, None, color=(255, 0, 0))
+        i = self.lookat_id
         base_pos = (self.root_states[i, :3]).cpu().numpy()
         heights = self.measured_heights[i].cpu().numpy()
         height_points = quat_apply_yaw(self.base_quat[i].repeat(heights.shape[0]), self.height_points[i]).cpu().numpy()
@@ -1894,7 +1352,7 @@ class HumanoidRobot(BaseTask):
             z = heights[j]
             sphere_pose = gymapi.Transform(gymapi.Vec3(x, y, z), r=None)
             gymutil.draw_lines(sphere_geom, self.gym, self.viewer, self.envs[i], sphere_pose)
-    
+
     def _draw_goals(self):
         sphere_geom = gymutil.WireframeSphereGeometry(0.1, 32, 32, None, color=(1, 0, 0))
         sphere_geom_cur = gymutil.WireframeSphereGeometry(0.1, 32, 32, None, color=(0, 0, 1))
@@ -1949,8 +1407,8 @@ class HumanoidRobot(BaseTask):
         Returns:
             [torch.Tensor]: Tensor of shape (num_envs, self.num_height_points, 3)
         """
-        y = torch.tensor(self.cfg.terrain.measured_points_y, device=self.device, requires_grad=False) # type: ignore
-        x = torch.tensor(self.cfg.terrain.measured_points_x, device=self.device, requires_grad=False) # pyright: ignore[reportAttributeAccessIssue]
+        y = torch.tensor(self.cfg.terrain.measured_points_y, device=self.device, requires_grad=False)
+        x = torch.tensor(self.cfg.terrain.measured_points_x, device=self.device, requires_grad=False)
         grid_x, grid_y = torch.meshgrid(x, y)
 
         self.num_height_points = grid_x.numel()
@@ -2032,662 +1490,410 @@ class HumanoidRobot(BaseTask):
         return heights.view(self.num_envs, -1) * self.terrain.cfg.vertical_scale, heights_data.view(self.num_envs, -1) * self.terrain.cfg.vertical_scale
 
     #------------ reward functions----------------
-    def _reward_lin_vel_z(self):
-        # Penalize z axis base linear velocity
-        return torch.square(self.base_lin_vel[:, 2])
-    
-    def _reward_ang_vel_xy(self):
-        # Penalize xy axes base angular velocity
-        return torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1)
-    
+    def _reward_tracking_lin_vel(self):
+        # Tracking of linear velocity commands (xy axes)
+        lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
+        return torch.exp(-lin_vel_error/self.cfg.rewards.tracking_sigma)
+    def _reward_tracking_ang_vel(self):
+        # Tracking of angular velocity commands (yaw) 
+        ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2])
+        return torch.exp(-ang_vel_error/self.cfg.rewards.tracking_sigma)
     def _reward_orientation(self):
         # Penalize non flat base orientation
         return torch.sum(torch.square(self.projected_gravity[:, :2]), dim=1)
-
     def _reward_base_height(self):
         # Penalize base height away from target
         base_height = torch.mean(self.root_states[:, 2].unsqueeze(1) - self.measured_heights, dim=1)
         return torch.square(base_height - self.cfg.rewards.base_height_target)
-    
+    def _reward_lin_vel_z(self):
+        # Penalize z axis base linear velocity
+        return torch.square(self.base_lin_vel[:, 2])
+    def _reward_ang_vel_xy(self):
+        # Penalize xy axes base angular velocity
+        return torch.sum(torch.square(self.base_ang_vel[:, :2]), dim=1)
     def _reward_torques(self):
         # Penalize torques
         return torch.sum(torch.square(self.torques), dim=1)
+    def _reward_action_rate(self):
+        # Penalize changes in actions
+        return torch.sum(torch.square(self.last_actions - self.actions), dim=1)
+    def _reward_smoothness(self):
+        # Penalize action smoothness
+        actions_diff = self.action_history_buf[:, -1] - 2 * self.action_history_buf[:, -2] + self.action_history_buf[:, -3]
+        return torch.sum(torch.square(actions_diff), dim=1)
+
+    def _reward_stand_still(self):
+        # Penalize motion at zero commands
+        return torch.sum(torch.square(self.dof_pos - self.default_dof_pos), dim=1) * (torch.norm(self.commands[:, :2], dim=1) < 0.1)
 
     def _reward_dof_vel(self):
         # Penalize dof velocities
         return torch.sum(torch.square(self.dof_vel), dim=1)
-    
     def _reward_dof_acc(self):
         # Penalize dof accelerations
         return torch.sum(torch.square((self.last_dof_vel - self.dof_vel) / self.dt), dim=1)
-    
-    def _reward_action_rate(self):
-        # Penalize changes in actions
-        return torch.sum(torch.square(self.last_actions - self.actions), dim=1)
-    
-    def _reward_collision(self):
-        # Penalize collisions on selected bodies
-        return torch.sum(1.*(torch.norm(self.contact_forces[:, self.penalised_contact_indices, :], dim=-1) > 0.1), dim=1)
-    
-    def _reward_termination(self):
-        # Terminal reward / penalty
-        return self.reset_buf * ~self.time_out_buf
-    
     def _reward_dof_pos_limits(self):
         # Penalize dof positions too close to the limit
         out_of_limits = -(self.dof_pos - self.dof_pos_limits[:, 0]).clip(max=0.) # lower limit
         out_of_limits += (self.dof_pos - self.dof_pos_limits[:, 1]).clip(min=0.)
         return torch.sum(out_of_limits, dim=1)
-
     def _reward_dof_vel_limits(self):
         # Penalize dof velocities too close to the limit
-        # clip to max error = 1 rad/s per joint to avoid huge penalties
-        return torch.sum((torch.abs(self.dof_vel) - self.dof_vel_limits*self.cfg.rewards.soft_dof_vel_limit).clip(min=0., max=1.), dim=1)
-
-    def _reward_torque_limits(self):
-        # penalize torques too close to the limit
-        return torch.sum((torch.abs(self.torques) - self.torque_limits*self.cfg.rewards.soft_torque_limit).clip(min=0.), dim=1)
-
-    def _reward_tracking_lin_vel(self):
-        # Tracking of linear velocity commands (xy axes)
-        lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
-        return torch.exp(-lin_vel_error/self.cfg.rewards.tracking_sigma)
+        # clip(min=0) is equivalent to ReLU
+        out_of_limits = (torch.abs(self.dof_vel) - self.dof_vel_limits).clip(min=0.)
+        return torch.sum(out_of_limits, dim=1)
     
-    def _reward_tracking_ang_vel(self):
-        # Tracking of angular velocity commands (yaw) 
-        ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2])
-        return torch.exp(-ang_vel_error/self.cfg.rewards.tracking_sigma)
+    def _reward_dof_torque_limits(self):
+        # Penalize dof torques too close to the limit
+        out_of_limits = (torch.abs(self.torques) - self.torque_limits).clip(min=0.)
+        return torch.sum(out_of_limits, dim=1)
+    
+    # def _reward_collision(self):
+    #     # Penalize collisions on selected bodies
+    #     return torch.sum(1.*(torch.norm(self.contact_forces[:, self.penalised_contact_indices, :], dim=-1) > 0.1), dim=1)
+    
+    def _reward_dof_power(self):
+        # Penalize joint power
+        return torch.sum(torch.abs(self.torques * self.dof_vel), dim=1)
+    # def _reward_termination(self):
+    #     # Terminal reward / penalty
+    #     return self.reset_buf * ~self.time_out_buf
 
     def _reward_feet_air_time(self):
-        # Reward long steps
-        # Need to filter the contacts because the contact reporting of PhysX is unreliable on meshes
+        # Reward for feet air time.
         contact = self.contact_forces[:, self.feet_indices, 2] > 1.
-        contact_filt = torch.logical_or(contact, self.last_contacts) 
-        self.last_contacts = contact
-        first_contact = (self.feet_air_time > 0.) * contact_filt
-        self.feet_air_time += self.dt
-        rew_airTime = torch.sum((self.feet_air_time - 0.5) * first_contact, dim=1) # reward only on first contact with the ground
-        rew_airTime *= torch.norm(self.commands[:, :2], dim=1) > 0.1 #no reward for zero command
-        self.feet_air_time *= ~contact_filt
-        return rew_airTime
-    
-    def _reward_stumble(self):
+        first_contact = (self.feet_air_time > 0.) * contact
+        rew = torch.sum((self.feet_air_time - self.cfg.rewards.feet_air_time_target).clip(min=0.) * first_contact, dim=1)
+        self.feet_air_time[first_contact] = 0 # reset after rewarding
+        return rew
+
+    def _reward_feet_ground_parallel(self):
+        # Penalize feet not parallel to the ground on contact
+        contact = self.contact_forces[:, self.feet_indices, 2] > 1.
+        # Get foot orientation quaternion
+        foot_quat = self.rigid_body_states[:, self.feet_indices, 3:7]
+        # Rotate z-axis vector by foot quaternion to get foot normal
+        z_vec = torch.tensor([0., 0., 1.], device=self.device).repeat(self.num_envs, 2, 1)
+        foot_normals = quat_apply(foot_quat, z_vec)
+        # Penalize deviation from world z-axis (0,0,1)
+        # dot product with (0,0,1) is just the z component.
+        # square of the error from parallel is (1 - z_component)^2, but for small angles 1-z^2 is a good approximation and simpler.
+        # So we penalize 1 - (foot_normal_z)^2 which is foot_normal_x^2 + foot_normal_y^2
+        foot_parallel_error = torch.sum(torch.square(foot_normals[..., :2]), dim=-1)
+        return torch.sum(foot_parallel_error * contact, dim=1)
+
+    def _reward_feet_distance(self):
+        # Penalize feet getting too close or too far
+        foot_pos = self.rigid_body_states[:, self.feet_indices, :3]
+        foot_dist_y = torch.abs(foot_pos[:, 0, 1] - foot_pos[:, 1, 1])
+        
+        # Penalize feet getting too close
+        close_penalty = torch.square(torch.clamp(self.cfg.rewards.min_dist - foot_dist_y, min=0.))
+        
+        # Penalize feet getting too far
+        far_penalty = torch.square(torch.clamp(foot_dist_y - self.cfg.rewards.max_dist, min=0.))
+        
+        return close_penalty + far_penalty
+
+    def _reward_feet_clearance(self):
+        # Reward for feet clearance during swing, scaled by foot velocity
+        contact = torch.norm(self.contact_forces[:, self.feet_indices, :3], dim=2) > 1.
+        feet_height = self.rigid_body_states[:, self.feet_indices, 2]
+        
+        # Calculate penalty for low feet clearance (only penalizes being too low)
+        low_clearance_penalty = torch.square(feet_height.clip(max=self.cfg.rewards.target_feet_height) - self.cfg.rewards.target_feet_height)
+        
+        # Get the world-frame linear velocity of the feet
+        foot_velocities = self.rigid_body_states[:, self.feet_indices, 7:10]
+        
+        # Calculate the speed in the XY plane (magnitude of the xy velocity vector)
+        foot_speed_xy = torch.norm(foot_velocities[..., :2], dim=-1)
+        
+        # The penalty is applied only to swing feet (~contact) and scaled by that foot's XY speed
+        return torch.sum(low_clearance_penalty * foot_speed_xy * ~contact, dim=1)
+    def _reward_feet_stumble(self):
         # Penalize feet hitting vertical surfaces
         return torch.any(torch.norm(self.contact_forces[:, self.feet_indices, :2], dim=2) >\
              5 *torch.abs(self.contact_forces[:, self.feet_indices, 2]), dim=1)
-        
-    def _reward_stand_still(self):
-        # Penalize motion at zero commands
-        return torch.sum(torch.abs(self.dof_pos - self.default_dof_pos), dim=1) * (torch.norm(self.commands[:, :2], dim=1) < 0.1)
-
-    def _reward_feet_contact_forces(self):
-        # penalize high contact forces
-        return torch.sum((torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1) -  self.cfg.rewards.max_contact_force).clip(min=0.), dim=1)
-
     def _reward_reach_goal(self):
         """到达目标奖励（指数衰减，与跟踪奖励一致）"""
         distance_to_goal = torch.norm(self.root_states[:, :2] - self.cur_goals[:, :2], dim=1)
-        
         # 使用指数衰减，距离越近奖励越高
-        return torch.exp(-distance_to_goal / 0.2)  # 0.5是衰减参数
-
-    def _reward_gap_success(self):
-        """改进的gap成功奖励：基于平面分析判断是否踩在正确的高平台上"""
-        # 检查是否在gap区域
-        in_gap_zone, plane_analysis = self._is_in_gap_zone()
-        
-        # 如果不在gap区域，不给奖励
-        if not torch.any(in_gap_zone):
-            return torch.zeros(self.num_envs, device=self.device)
-        
-        # Parameters
-        contact_threshold = 10.0    # [N] 接触力阈值
-        height_tolerance = 0.03     # [m] 高度容差，3cm内认为在正确平台上
-        
-        # Detect foot contact
-        contact = self.contact_forces[:, self.feet_indices, 2] > contact_threshold  # [E, F]
-        
-        # Get foot heights directly from rigid body states (Z coordinates)
-        foot_h = self.rigid_body_states[:, self.feet_indices, 2]  # [E, F]
-        
-        # 计算机器人根部高度
-        base_height = self.root_states[:, 2]  # [E]
-        
-        # Only reward NEW contacts (first-time landings to avoid repeated rewards)
-        if not hasattr(self, 'last_foot_contacts'):
-            self.last_foot_contacts = torch.zeros_like(contact)
-        
-        new_contact = contact & (~self.last_foot_contacts)  # [E, F]
-        self.last_foot_contacts = contact.clone()  # Update for next timestep
-        
-        # 初始化奖励
-        rew = torch.zeros(self.num_envs, device=self.device)
-        
-        # 向量化计算gap区域的奖励
-        if torch.any(in_gap_zone):
-            # 获取gap区域环境的索引
-            gap_env_mask = in_gap_zone  # [E]
-            
-            # 批量获取平面高度
-            high_plane_heights = plane_analysis['high_plane_height']  # [E]
-            low_plane_heights = plane_analysis['low_plane_height']   # [E]
-            
-            # 计算根部到两个平面的距离
-            base_dist_to_high = torch.abs(base_height - high_plane_heights)  # [E]
-            base_dist_to_low = torch.abs(base_height - low_plane_heights)    # [E]
-            
-            # 判断机器人是否在高平台上
-            on_high_platform = base_dist_to_high < base_dist_to_low  # [E]
-            
-            # 计算脚部到平面的距离
-            foot_dist_to_high = torch.abs(foot_h.unsqueeze(-1) - high_plane_heights.unsqueeze(1).unsqueeze(-1)).squeeze(-1)  # [E, F]
-            foot_dist_to_low = torch.abs(foot_h.unsqueeze(-1) - low_plane_heights.unsqueeze(1).unsqueeze(-1)).squeeze(-1)   # [E, F]
-            
-            # 判断脚部是否在高平台上
-            foot_on_high_platform = (foot_dist_to_high < height_tolerance) & (foot_dist_to_high < foot_dist_to_low)  # [E, F]
-            
-            # 计算奖励：只对新接触且在正确平台的脚给奖励
-            valid_contact = new_contact & foot_on_high_platform & gap_env_mask.unsqueeze(1)  # [E, F]
-            
-            # 计算距离奖励
-            distance_rewards = torch.clamp(1.0 - (foot_dist_to_high / height_tolerance), 0.0, 1.0)  # [E, F]
-            
-            # 对在低平台的机器人给额外奖励
-            low_platform_bonus = (~on_high_platform).float() * 0.5  # [E]
-            distance_rewards = distance_rewards * (1.0 + low_platform_bonus.unsqueeze(1))  # [E, F]
-            
-            # 累加有效接触的奖励
-            rew = torch.sum(valid_contact.float() * distance_rewards, dim=1)  # [E]
-        
-        # 归一化：假设最多2只脚（双足机器人）
-        num_feet = foot_h.shape[1]
-        normalized_reward = rew / num_feet
-        
-        # 只在gap区域给奖励
-        final_reward = normalized_reward * in_gap_zone.float()
-         
-        return final_reward
-
-    def _reward_gap_void_penalty(self):
-        """改进的踩空惩罚：基于平面分析判断是否踩在gap区域"""
-        # 检查是否在gap区域
-        in_gap_zone, plane_analysis = self._is_in_gap_zone()
-        
-        # 如果不在gap区域，不给惩罚
-        if not torch.any(in_gap_zone):
-            return torch.zeros(self.num_envs, device=self.device)
-        
-        # Parameters
-        contact_threshold = 5.0     # [N] 接触力阈值
-        void_tolerance = 0.03       # [m] void判断容差，3cm内认为在低平面（gap区域）
-        
-        # Detect foot contact
-        foot_contact = self.contact_forces[:, self.feet_indices, 2] > contact_threshold  # [E, F]
-        
-        # Get foot heights directly from rigid body states (Z coordinates)
-        foot_h = self.rigid_body_states[:, self.feet_indices, 2]  # [E, F]
-        
-        # 计算机器人根部高度
-        base_height = self.root_states[:, 2]  # [E]
-        
-        # 初始化惩罚
-        penalty = torch.zeros(self.num_envs, device=self.device)
-        
-        # 向量化计算gap区域的惩罚
-        if torch.any(in_gap_zone):
-            # 获取平面高度
-            high_plane_heights = plane_analysis['high_plane_height']  # [E]
-            low_plane_heights = plane_analysis['low_plane_height']   # [E]
-            
-            # 计算脚部到低平面的距离
-            foot_dist_to_high = torch.abs(foot_h.unsqueeze(-1) - high_plane_heights.unsqueeze(1).unsqueeze(-1)).squeeze(-1)  # [E, F]
-            foot_dist_to_low = torch.abs(foot_h.unsqueeze(-1) - low_plane_heights.unsqueeze(1).unsqueeze(-1)).squeeze(-1)   # [E, F]
-            
-            # 判断脚部是否在gap区域（低平面）
-            foot_in_void = (foot_dist_to_low < void_tolerance) & (foot_dist_to_low < foot_dist_to_high)  # [E, F]
-            
-            # 计算脚部踩空惩罚
-            foot_penalties = torch.clamp(1.0 - (foot_dist_to_low / void_tolerance), 0.0, 1.0)  # [E, F]
-            foot_void_penalty = torch.sum((foot_contact & foot_in_void & in_gap_zone.unsqueeze(1)).float() * foot_penalties, dim=1)  # [E]
-            
-            # 计算根部掉入gap的惩罚
-            root_dist_to_high = torch.abs(base_height - high_plane_heights)  # [E]
-            root_dist_to_low = torch.abs(base_height - low_plane_heights)    # [E]
-            
-            root_in_void = (root_dist_to_low < void_tolerance) & (root_dist_to_low < root_dist_to_high) & in_gap_zone  # [E]
-            root_penalties = 2.0 * torch.clamp(1.0 - (root_dist_to_low / void_tolerance), 0.0, 1.0)  # [E]
-            root_void_penalty = root_in_void.float() * root_penalties  # [E]
-            
-            # 总惩罚
-            penalty = foot_void_penalty + root_void_penalty  # [E]
-        else:
-            penalty = torch.zeros(self.num_envs, device=self.device)
-        
-        # 归一化：假设最多2只脚 + 根部，总共3个惩罚源
-        num_feet = foot_h.shape[1]
-        max_penalty_sources = num_feet + 1  # 脚 + 根部
-        normalized_penalty = penalty / max_penalty_sources
-        
-        # 转换为负值（惩罚）
-        final_penalty = -normalized_penalty
-        
-        # 只在gap区域给惩罚
-        activated_penalty = final_penalty * in_gap_zone.float()
-        
-        return activated_penalty
-
-    def _is_foot_in_void(self, foot_positions=None):
-        """基于平面分析检查脚部位置是否在void/gap区域"""
-        # 检查是否在gap区域
-        in_gap_zone, plane_analysis = self._is_in_gap_zone()
-        
-        # 如果不在gap区域，返回全False
-        if not torch.any(in_gap_zone):
-            num_feet = len(self.feet_indices)
-            return torch.zeros(self.num_envs, num_feet, dtype=torch.bool, device=self.device)
-        
-        # 直接获取脚部高度（Z坐标）
-        foot_heights = self.rigid_body_states[:, self.feet_indices, 2]  # [E, F]
-        
-        void_tolerance = 0.05  # 5cm容差
-        is_void = torch.zeros_like(foot_heights, dtype=torch.bool)
-        
-        # 向量化计算所有环境和脚部
-        if torch.any(in_gap_zone):
-            high_plane_heights = plane_analysis['high_plane_height']  # [E]
-            low_plane_heights = plane_analysis['low_plane_height']   # [E]
-            
-            # 计算距离 [E, F]
-            dist_to_high = torch.abs(foot_heights.unsqueeze(-1) - high_plane_heights.unsqueeze(1).unsqueeze(-1)).squeeze(-1)
-            dist_to_low = torch.abs(foot_heights.unsqueeze(-1) - low_plane_heights.unsqueeze(1).unsqueeze(-1)).squeeze(-1)
-            
-            # 判断是否在void区域
-            void_condition = (dist_to_low < void_tolerance) & (dist_to_low < dist_to_high)
-            is_void = void_condition & in_gap_zone.unsqueeze(1)  # 只在gap区域内才算void
-        
-        return is_void
+        return torch.exp(-torch.abs(distance_to_goal) / 0.3)
     
-    def _reward_gap_progress(self):
-        """改进的跨越进度奖励：基于地形复杂度阈值启用"""
-        # 检查是否在gap区域
-        in_gap_zone, plane_analysis = self._is_in_gap_zone()
-        
-        # 如果不在gap区域，不给奖励
-        if not torch.any(in_gap_zone):
-            return torch.zeros(self.num_envs, device=self.device)
-        
-        # 获取机器人基座的 x 坐标
-        base_x = self.root_states[:, 0]
-        
-        # 获取任务区域起始位置
-        task_start_x = self._get_task_start_x()
-        
-        # 计算相对于任务起始位置的进度
-        progress = torch.clamp(base_x - task_start_x, min=0)
-        
-        # 基于平面分析给予额外奖励
-        # 如果机器人成功从低平面移动到高平面区域，给予额外进度奖励
-        base_height = self.root_states[:, 2]  # [E]
-        
-        # 向量化计算所有环境的进度奖励
-        progress_reward = torch.zeros(self.num_envs, device=self.device)
-        
-        if torch.any(in_gap_zone):
-            # 基础进度奖励
-            basic_progress = progress / 5.0  # 归一化到5米
-            progress_reward = basic_progress * in_gap_zone.float()
-            
-            # 如果检测到两个平面，给予额外的高度进度奖励
-            has_planes_mask = plane_analysis['has_two_planes'] & in_gap_zone
-            
-            if torch.any(has_planes_mask):
-                high_plane_heights = plane_analysis['high_plane_height']
-                low_plane_heights = plane_analysis['low_plane_height']
-                
-                # 计算机器人高度相对于两个平面的位置
-                height_diff = high_plane_heights - low_plane_heights
-                height_progress = torch.clamp(
-                    (base_height - low_plane_heights) / (height_diff + 1e-8), 
-                    0.0, 1.0
-                )
-                
-                # 高度进度奖励：越接近高平面奖励越高
-                height_bonus = 0.5 * height_progress * has_planes_mask.float()
-                progress_reward += height_bonus
-        
-        # 只在gap区域给奖励
-        final_reward = progress_reward * in_gap_zone.float()
-        
-        return final_reward
+    def _reward_heading_tracking(self):
+        """朝向跟踪奖励 - 鼓励机器人朝向目标点"""
+        heading_error = wrap_to_pi(self.target_yaw - self.yaw)
+        return torch.exp(-torch.abs(heading_error) / 0.3)  # 朝向越准确奖励越高
     
-    def _reward_gap_impact_penalty(self):
-        """改进的落地冲击惩罚：基于地形复杂度阈值启用"""
-        # 检查是否在gap区域
-        in_gap_zone, _ = self._is_in_gap_zone()
-        
-        # 如果不在gap区域，不给惩罚
-        if not torch.any(in_gap_zone):
-            return torch.zeros(self.num_envs, device=self.device)
-        
-        # 使用现有的脚部接触力奖励函数，但只在gap区域内应用
-        raw_penalty = self._reward_feet_contact_forces()
-        
-        # 只在gap区域应用惩罚
-        activated_penalty = raw_penalty * in_gap_zone.float()
+    def _reward_next_heading_tracking(self):
+        """朝向跟踪奖励 - 鼓励机器人朝向目标点"""
+        next_heading_error = wrap_to_pi(self.next_target_yaw - self.yaw)
+        return torch.exp(-torch.abs(next_heading_error) / 0.3)  # 朝向越准确奖励越高
 
-        
-        return activated_penalty
     
-    def _resample_commands_intelligent(self, env_ids):
-        """智能的命令重采样（策略1.2.4）"""
-        
-        #  基于高度信息生成自适应速度
-        if self.cfg.commands.height_adaptive_speed:  # 新增配置开关
-            adaptive_speeds = self._generate_adaptive_speed(env_ids)
-            self.commands[env_ids, 0] = adaptive_speeds
-        else:
-            # 保留原有的随机采样作为备选
-            self.commands[env_ids, 0] = torch_rand_float(
-                self.command_ranges["lin_vel_x"][0], 
-                self.command_ranges["lin_vel_x"][1], 
-                (len(env_ids), 1), device=self.device
-            ).squeeze(1) 
-        
-        if self.cfg.commands.heading_command:
-            # 1. 随机采样朝向角度
-            self.commands[env_ids, 3] = torch_rand_float(
-                self.command_ranges["heading"][0], 
-                self.command_ranges["heading"][1], 
-                (len(env_ids), 1), 
-                device=self.device
-            ).squeeze(1)
-            
-            # 2. 计算当前朝向角度
-            forward = quat_apply(self.base_quat[env_ids], self.forward_vec[env_ids])
-            heading = torch.atan2(forward[:, 1], forward[:, 0])
-            
-            # 3. 计算朝向误差和角速度命令
-            heading_error = self.commands[env_ids, 3] - heading
-            heading_error_wrapped = wrap_to_pi(heading_error)
-            
-            # 4. 应用比例控制器计算角速度
-            angular_velocity = 0.8 * heading_error_wrapped
-            self.commands[env_ids, 2] = torch.clip(angular_velocity, -1.0, 1.0)
-            
-            # 5. 死区处理（避免微小抖动）
-            small_command_mask = torch.abs(self.commands[env_ids, 2]) <= self.cfg.commands.ang_vel_clip
-            self.commands[env_ids, 2] = torch.where(small_command_mask, 
-                                                   torch.zeros_like(self.commands[env_ids, 2]), 
-                                                   self.commands[env_ids, 2])
-        else:
-            # 传统模式：直接采样角速度命令
-            self.commands[env_ids, 2] = torch_rand_float(
-                self.command_ranges["ang_vel_yaw"][0], 
-                self.command_ranges["ang_vel_yaw"][1], 
-                (len(env_ids), 1), 
-                device=self.device
-            ).squeeze(1)
-            
-            # 如果角速度太小，设为0（避免微小抖动）
-            small_ang_vel_mask = torch.abs(self.commands[env_ids, 2]) <= self.cfg.commands.ang_vel_clip
-            self.commands[env_ids, 2] = torch.where(small_ang_vel_mask, 
-                                                   torch.zeros_like(self.commands[env_ids, 2]), 
-                                                   self.commands[env_ids, 2])
+    def _reward_joint_tracking_error(self):
+        """关节跟踪误差奖励 - 鼓励关节位置跟踪目标位置"""
+        joint_error = torch.sum(torch.square(self.dof_pos - self.default_dof_pos_all), dim=1)
+        return torch.exp(-joint_error / self.cfg.rewards.tracking_sigma)
 
-        # 如果前向速度太小，将前向和侧向速度都设为0
-        small_lin_vel_mask = torch.abs(self.commands[env_ids, 0]) <= self.cfg.commands.lin_vel_clip
-        self.commands[env_ids, 0] = torch.where(small_lin_vel_mask, 
-                                               torch.zeros_like(self.commands[env_ids, 0]), 
-                                               self.commands[env_ids, 0])
-        self.commands[env_ids, 1] = torch.where(small_lin_vel_mask, 
-                                               torch.zeros_like(self.commands[env_ids, 1]), 
-                                               self.commands[env_ids, 1])
+    def _reward_arm_joint_deviation(self):
+        """手臂关节偏离奖励 - 惩罚手臂关节偏离默认位置"""
+        # G1 Arm joints: 1-8
+        arm_indices = torch.cat([torch.arange(1, 9, device=self.device)])
+        arm_error = torch.sum(torch.square(self.dof_pos[:, arm_indices] - self.default_dof_pos_all[:, arm_indices]), dim=1)
+        return torch.exp(-arm_error / self.cfg.rewards.tracking_sigma)
 
+    def _reward_hip_joint_deviation(self):
+        """髋关节偏离奖励 - 惩罚髋关节偏离默认位置"""
+        # G1 Hip/Leg joints: 9-20
+        hip_indices = torch.cat([torch.arange(9, 21, device=self.device)])
+        hip_error = torch.sum(torch.square(self.dof_pos[:, hip_indices] - self.default_dof_pos_all[:, hip_indices]), dim=1)
+        return torch.exp(-hip_error / self.cfg.rewards.tracking_sigma)
 
-    def _generate_adaptive_speed(self, env_ids):
-        """基于地形复杂度生成自适应速度"""
-        complexity = self._analyze_terrain_complexity()[env_ids]
-        
-        # 速度策略：
-        # - 简单地形（complexity < 0.3）：高速前进 [1.0, 1.5] m/s
-        # - 中等地形（0.3 ≤ complexity < 0.7）：中速前进 [0.5, 1.0] m/s  
-        # - 困难地形（complexity ≥ 0.7）：低速前进 [0.2, 0.5] m/s
-        
-        base_speed = 1.0 - complexity  # 基础速度：1.5 → 0.5
-        speed_range = 0.3 * (1 - complexity)  # 速度范围：简单地形变化大，困难地形变化小
-        
-        # 在基础速度±范围内随机采样
-        min_speed = torch.clamp(base_speed - speed_range, 0.1, 1.4)
-        max_speed = torch.clamp(base_speed + speed_range, 0.2, 1.5)
-        
-        adaptive_speeds = torch.empty((len(env_ids), 1), device=self.device)
-        adaptive_speeds.uniform_(0, 1)
-        adaptive_speeds = min_speed.unsqueeze(1) + adaptive_speeds * (max_speed.unsqueeze(1) - min_speed.unsqueeze(1))
-        adaptive_speeds = adaptive_speeds.squeeze(1)
-        
-        return adaptive_speeds
+    def _reward_waist_joint_deviation(self):
+        """腰部关节偏离奖励 - 惩罚腰部关节偏离默认位置"""
+        # G1 Waist joint: 0
+        waist_indices = torch.tensor([0], device=self.device)
+        waist_error = torch.sum(torch.square(self.dof_pos[:, waist_indices] - self.default_dof_pos_all[:, waist_indices]), dim=1)
+        return torch.exp(-waist_error / self.cfg.rewards.tracking_sigma)
 
+    def _reward_no_fly(self):
+        """防飞行奖励 - 惩罚机器人过度跳跃或飞行"""
+        # 基于脚部接触时间和基座高度判断
+        base_height = self.root_states[:, 2]
+        contact_penalty = torch.sum(self.feet_air_time > 0.5, dim=1)  # 单脚悬空时间过长
+        height_penalty = torch.square(torch.clamp(base_height - 1.2, min=0.))  # 基座高度过高
+        return contact_penalty + height_penalty
 
-    def _analyze_terrain_planes(self):
-        """分析measured_heights来检测两个主要平面（高平台和gap区域）- 向量化优化版本"""
-        # 检查measured_heights是否已初始化
-        if not hasattr(self, 'measured_heights') or isinstance(self.measured_heights, int):
-            # 返回默认值：single_plane=True, 高度为0
-            return {
-                'has_two_planes': torch.zeros(self.num_envs, dtype=torch.bool, device=self.device),
-                'high_plane_height': torch.zeros(self.num_envs, device=self.device),
-                'low_plane_height': torch.zeros(self.num_envs, device=self.device),
-                'plane_distance': torch.zeros(self.num_envs, device=self.device),
-                'high_plane_points': torch.zeros_like(self.measured_heights, dtype=torch.bool),
-                'low_plane_points': torch.zeros_like(self.measured_heights, dtype=torch.bool)
-            }
+    def _reward_feet_slip(self):
+        """防滑移奖励 - 惩罚脚部在地面上滑动"""
+        foot_vel = self.rigid_body_states[:, self.feet_indices, 7:10]  # 脚部线速度
+        foot_contact = torch.norm(self.contact_forces[:, self.feet_indices, :2], dim=-1) > 5.0  # 脚部有接触
         
-        gap_threshold = 0.05  # 5cm，认为是gap的最小高度差
-        noise_threshold = 0.02  # 2cm，噪声阈值
-        
-        # 向量化计算所有环境的高度统计
-        min_heights = torch.min(self.measured_heights, dim=1)[0]  # [E]
-        max_heights = torch.max(self.measured_heights, dim=1)[0]  # [E]
-        height_ranges = max_heights - min_heights  # [E]
-        mean_heights = torch.mean(self.measured_heights, dim=1)  # [E]
-        median_heights = torch.median(self.measured_heights, dim=1)[0]  # [E]
-        
-        # 判断平坦区域
-        is_flat = height_ranges < noise_threshold  # [E]
-        
-        # 初始化输出张量
-        has_two_planes = ~is_flat  # 先假设非平坦区域都有两个平面
-        high_plane_height = mean_heights.clone()  # [E]
-        low_plane_height = mean_heights.clone()   # [E]
-        plane_distance = torch.zeros(self.num_envs, device=self.device)  # [E]
-        high_plane_points = torch.ones_like(self.measured_heights, dtype=torch.bool)  # [E, P]
-        low_plane_points = torch.zeros_like(self.measured_heights, dtype=torch.bool)  # [E, P]
-        
-        # 对非平坦区域进行平面分离
-        non_flat_mask = ~is_flat
-        if torch.any(non_flat_mask):
-            # 使用中值作为分离阈值
-            thresholds = median_heights[non_flat_mask].unsqueeze(1)  # [N, 1]
-            non_flat_heights = self.measured_heights[non_flat_mask]  # [N, P]
-            
-            # 分离高低平面
-            low_mask = non_flat_heights <= thresholds  # [N, P]
-            high_mask = non_flat_heights > thresholds  # [N, P]
-            
-            # 检查是否有效分离（两个平面都有点）
-            low_count = torch.sum(low_mask.float(), dim=1)  # [N]
-            high_count = torch.sum(high_mask.float(), dim=1)  # [N]
-            valid_separation = (low_count > 0) & (high_count > 0)  # [N]
-            
-            if torch.any(valid_separation):
-                # 计算平面高度（使用masked操作避免除零）
-                low_heights_sum = torch.sum(non_flat_heights * low_mask.float(), dim=1)  # [N]
-                high_heights_sum = torch.sum(non_flat_heights * high_mask.float(), dim=1)  # [N]
-                
-                low_means = low_heights_sum / (low_count + 1e-8)  # [N]
-                high_means = high_heights_sum / (high_count + 1e-8)  # [N]
-                
-                # 检查高度差是否足够大
-                height_diffs = high_means - low_means  # [N]
-                significant_gap = height_diffs > gap_threshold  # [N]
-                
-                # 最终有效的双平面环境
-                final_valid = valid_separation & significant_gap  # [N]
-                
-                if torch.any(final_valid):
-                    # 更新有效环境的平面信息
-                    valid_indices = torch.where(non_flat_mask)[0][final_valid]  # 获取原始索引
-                    
-                    high_plane_height[valid_indices] = high_means[final_valid]
-                    low_plane_height[valid_indices] = low_means[final_valid]
-                    plane_distance[valid_indices] = height_diffs[final_valid]
-                    
-                    # 重新分配点到更接近的平面
-                    for i, env_idx in enumerate(valid_indices):
-                        env_heights = self.measured_heights[env_idx]
-                        high_h = high_plane_height[env_idx]
-                        low_h = low_plane_height[env_idx]
-                        
-                        dist_to_high = torch.abs(env_heights - high_h)
-                        dist_to_low = torch.abs(env_heights - low_h)
-                        
-                        high_plane_points[env_idx] = dist_to_high < dist_to_low
-                        low_plane_points[env_idx] = dist_to_low <= dist_to_high
-                
-                # 无效分离的环境标记为单平面
-                invalid_indices = torch.where(non_flat_mask)[0][~final_valid]
-                has_two_planes[invalid_indices] = False
-        
-        # 平坦区域保持单平面设置
-        has_two_planes[is_flat] = False
-        
-        return {
-            'has_two_planes': has_two_planes,
-            'high_plane_height': high_plane_height,
-            'low_plane_height': low_plane_height,
-            'plane_distance': plane_distance,
-            'high_plane_points': high_plane_points,
-            'low_plane_points': low_plane_points
-        }
+        # 当脚部接触地面时，惩罚水平速度
+        slip_penalty = torch.sum(torch.norm(foot_vel[:, :, :2], dim=-1) * foot_contact.float(), dim=1)
+        return slip_penalty
 
-    def _analyze_terrain_complexity(self):
-        """分析前方地形复杂度"""
-        # 检查measured_heights是否已初始化
-        if not hasattr(self, 'measured_heights') or isinstance(self.measured_heights, int):
-            # 如果还没有初始化，返回默认复杂度
+    def _reward_feet_parallel(self):
+        """脚部平行奖励 - 鼓励双脚保持平行"""
+        foot_quat = self.rigid_body_states[:, self.feet_indices, 3:7]
+        
+        # 计算双脚方向的差异
+        foot1_rot = self.quat_to_rot_mat(foot_quat[:, 0])
+        foot2_rot = self.quat_to_rot_mat(foot_quat[:, 1])
+        
+        # 比较前向向量（x轴方向）
+        foot1_forward = foot1_rot[:, :, 0]  # 第一列是前向向量
+        foot2_forward = foot2_rot[:, :, 0]
+        
+        # 计算方向差异（点积越接近1越平行）
+        alignment = torch.bmm(foot1_forward.unsqueeze(1), foot2_forward.unsqueeze(2)).squeeze()
+        parallel_error = 1.0 - alignment
+        
+        return parallel_error
+
+    def _reward_feet_forward_alignment(self):
+        """脚部前向对齐奖励 - 鼓励双脚朝向与运动方向一致 (高斯衰减版本)"""
+        foot_quat = self.rigid_body_states[:, self.feet_indices, 3:7]
+        foot_rot = self.quat_to_rot_mat(foot_quat)
+        foot_forward = foot_rot[:, :, :, 0]  # x轴为前向, shape: (num_envs, 2, 3)
+
+        robot_vel_xy = self.root_states[:, 7:9]
+        robot_speed_xy = torch.norm(robot_vel_xy, dim=-1)
+
+        # 仅在机器人有明显水平移动时计算此奖励，避免静止时产生干扰
+        moving_mask = (robot_speed_xy > 0.1).float()
+
+        forward_vec_normalized = robot_vel_xy / (robot_speed_xy.unsqueeze(-1) + 1e-5)
+        forward_vec = torch.cat([forward_vec_normalized, torch.zeros_like(forward_vec_normalized[:, :1])], dim=-1)
+
+        # 计算对齐度 (cosine similarity)
+        alignment1 = torch.bmm(foot_forward[:, 0].unsqueeze(1), forward_vec.unsqueeze(2)).squeeze()
+        alignment2 = torch.bmm(foot_forward[:, 1].unsqueeze(1), forward_vec.unsqueeze(2)).squeeze()
+
+        # 计算对齐误差 (理想值为1，当前值为alignment，误差为 1 - alignment)
+        error1 = 1.0 - alignment1
+        error2 = 1.0 - alignment2
+
+        # 应用高斯衰减，误差越小，奖励越接近1
+        # self.cfg.rewards.tracking_sigma 来自于配置文件
+        rew1 = torch.exp(-torch.square(error1) / self.cfg.rewards.tracking_sigma)
+        rew2 = torch.exp(-torch.square(error2) / self.cfg.rewards.tracking_sigma)
+
+        # 返回平均奖励，并只在移动时生效
+        return ((rew1 + rew2) / 2) * moving_mask
+
+    def _reward_feet_perpendicular_alignment(self):
+        """脚部侧向对齐奖励 - 鼓励双脚的侧向（Y轴）与运动方向一致 (高斯衰减版本)"""
+        foot_quat = self.rigid_body_states[:, self.feet_indices, 3:7]
+        foot_rot = self.quat_to_rot_mat(foot_quat)
+        foot_side = foot_rot[:, :, :, 1]  # y轴为侧向, shape: (num_envs, 2, 3)
+
+        robot_vel_xy = self.root_states[:, 7:9]
+        robot_speed_xy = torch.norm(robot_vel_xy, dim=-1)
+
+        # 仅在机器人有明显水平移动时计算此奖励，避免静止时产生干扰
+        moving_mask = (robot_speed_xy > 0.1).float()
+
+        forward_vec_normalized = robot_vel_xy / (robot_speed_xy.unsqueeze(-1) + 1e-5)
+        forward_vec = torch.cat([forward_vec_normalized, torch.zeros_like(forward_vec_normalized[:, :1])], dim=-1)
+
+        # 计算对齐度 (cosine similarity)
+        alignment1 = torch.bmm(foot_side[:, 0].unsqueeze(1), forward_vec.unsqueeze(2)).squeeze()
+        alignment2 = torch.bmm(foot_side[:, 1].unsqueeze(1), forward_vec.unsqueeze(2)).squeeze()
+
+        # 计算对齐误差 (理想值为1，当前值为alignment，误差为 1 - alignment)
+        error1 = 1.0 - alignment1
+        error2 = 1.0 - alignment2
+
+        # 应用高斯衰减，误差越小，奖励越接近1
+        rew1 = torch.exp(-torch.square(error1) / self.cfg.rewards.tracking_sigma)
+        rew2 = torch.exp(-torch.square(error2) / self.cfg.rewards.tracking_sigma)
+
+        # 返回平均奖励，并只在移动时生效
+        return ((rew1 + rew2) / 2) * moving_mask
+
+    def _reward_feet_contact_force(self):
+        # penalize high contact forces
+        return torch.sum((torch.norm(self.contact_forces[:, self.feet_indices, :], dim=-1) -  self.cfg.rewards.max_contact_force).clip(min=0.), dim=1)
+    def _reward_contact_momentum(self):
+        """接触动量奖励 - 惩罚不稳定的接触模式"""
+        contact_forces = self.contact_forces[:, self.feet_indices, :]
+        foot_positions = self.rigid_body_states[:, self.feet_indices, :3]
+        
+        # 计算相对于基座的力矩
+        base_pos = self.root_states[:, :3].unsqueeze(1)
+        relative_pos = foot_positions - base_pos
+        
+        # 计算接触力产生的力矩
+        moments = torch.cross(relative_pos, contact_forces, dim=-1)
+        total_moment = torch.sum(torch.norm(moments, dim=-1), dim=1)
+        
+        # 惩罚过大的力矩（不稳定的接触模式）
+        return torch.clamp(total_moment - 10.0, min=0.0)
+
+    def _reward_bridge_center(self):
+        """独木桥居中奖励 - 鼓励机器人在桥中央行走"""
+        # 计算机器人相对于桥中心的位置
+        y_offset = torch.abs(self.root_states[:, 1] - self.cur_goals[:, 1])
+        # 距离桥中心越近奖励越高
+        return torch.exp(-y_offset / 0.3)
+    def _reward_safe_foot_placement(self):
+        """奖励机器人将落脚点(当前接触足)放在相对平坦、非边缘的区域。
+
+        逻辑:
+        1. 使用 measured_heights 构造成高度网格 [E, Nx, Ny]。
+        2. 计算局部粗糙度 (与 _reward_stride_terrain_aware 相同方式) 得到 roughness[E, Nx, Ny]。
+        3. 取得所有足端当前世界坐标 -> 转换到机体坐标 (假设 measured_points_x/y 是以机体为原点的采样格点).
+        4. 将足端 (x,y) 对应到网格索引 (最近栅格, clamp 到合法范围)。
+        5. 对于接触足, 取其所在 cell 的 roughness, 求平均粗糙度 mean_r。
+        6. 奖励 = exp(-beta * mean_r)。beta 可调(此处固定为 10)。
+
+        安全性:
+        - 若未启用高度测量或尺寸不匹配 -> 返回 0。
+        - 若当前无接触足 -> 视为奖励 0 (或可设为中性 0.5, 这里取 0)。
+        """
+        if not self.cfg.terrain.measure_heights:
             return torch.zeros(self.num_envs, device=self.device)
-        
-        front_x_indices = [3, 4, 5, 6]  # x = 0, 0.15, 0.3, 0.45 的索引
+
+        front_x_indices = [3, 4, 5, 6, 7, 8]  # x = 0, 0.15, 0.3, 0.45 的索引 0.15, 0.3, 0.45, 0.6, 0.75
         front_point_indices = []
         for x_idx in front_x_indices:
             for y_idx in range(11):  # 所有y方向
                 front_point_indices.append(x_idx * 11 + y_idx)
-        
+
         forward_heights = self.measured_heights[:, front_point_indices]
-        
-        # 计算每一行的方差、最大最小值和粗糙度
-        height_variance = torch.zeros(self.num_envs, device=self.device)
-        height_gradient = torch.zeros(self.num_envs, device=self.device)
-        height_roughness = torch.zeros(self.num_envs, device=self.device)
-        
-        for i in range(4):  # 4行：x = 0, 0.15, 0.3, 0.45
-            row_heights = forward_heights[:, i*11:(i+1)*11]  # 第i行的11个点
-            
-            # 每行的方差
-            row_variance = torch.var(row_heights, dim=1)
-            height_variance += row_variance
-            
-            # 每行的最大最小值差
-            row_range = torch.max(row_heights, dim=1)[0] - torch.min(row_heights, dim=1)[0]
-            height_gradient += row_range
-            
-            # 每行的粗糙度（相邻点的高度差）
-            row_roughness = torch.mean(torch.abs(torch.diff(row_heights, dim=1)), dim=1)
-            height_roughness += row_roughness
-        
-        # 取平均值
-        height_variance /= 4
-        height_gradient /= 4
-        height_roughness /= 4
-        
-        complexity = torch.clamp(
-            0.3 * height_variance +  # 使用固定权重替代配置
-            0.4 * height_gradient + 
-            0.3 * height_roughness,
-            0.0, 1.0
-        )
-        return complexity
 
-    def _is_in_gap_zone(self):
-        """基于地形复杂度和平面分析来判断是否在gap区域 - 缓存优化版本"""
-        # 检查缓存是否有效（每5步更新一次以减少计算）
-        if not hasattr(self, '_gap_zone_cache') or self.global_counter % 5 == 0:
-            # 获取地形复杂度
-            complexity = self._analyze_terrain_complexity()
-            complexity_threshold = 0.3  # 复杂度阈值，超过此值认为在复杂地形区域
-            
-            # 获取平面分析结果
-            plane_analysis = self._analyze_terrain_planes()
-            
-            # 判断条件：
-            # 1. 地形复杂度超过阈值
-            # 2. 检测到两个明显的平面（存在gap）
-            # 3. 平面间距离足够大（至少5cm）
-            is_complex = complexity > complexity_threshold
-            has_gap = plane_analysis['has_two_planes']
-            significant_gap = plane_analysis['plane_distance'] > 0.05
-            
-            # 综合判断：在gap区域需要同时满足复杂度和平面分析条件
-            in_gap_zone = is_complex & has_gap & significant_gap
-            
-            # 缓存结果
-            self._gap_zone_cache = (in_gap_zone, plane_analysis)
-        
-        return self._gap_zone_cache
-
-    def _update_terrain_complexity_history(self):
-        """更新地形复杂度历史缓冲区"""
-        # 计算当前地形复杂度
-        current_complexity = self._analyze_terrain_complexity()
-        
-        # 将当前复杂度存储到历史缓冲区
-        for env_id in range(self.num_envs):
-            ptr = self.terrain_complexity_ptr[env_id]
-            self.terrain_complexity_history[env_id, ptr] = current_complexity[env_id]
-            
-            # 更新指针（环形缓冲区）
-            self.terrain_complexity_ptr[env_id] = (ptr + 1) % self.terrain_complexity_history.shape[1]
-
-    def _get_task_zone_activation(self):
-        """获取任务区域激活程度（0到1之间）- 已弃用，由_is_in_gap_zone替代"""
-        # 保持接口兼容性，但使用新的gap区域检测
-        in_gap_zone, _ = self._is_in_gap_zone()
-        return in_gap_zone.float()  # 转换为0-1浮点数
-
-    def _get_foot_heights_from_terrain(self):
-        """Helper function to get foot heights - directly from rigid body states"""
-        # Get foot world positions from rigid body states
-        foot_positions = self.rigid_body_states[:, self.feet_indices, :3]  # [E, F, 3]
-        
-        # Return Z coordinates (heights) directly
-        foot_heights = foot_positions[:, :, 2]  # [E, F]
-        
-        return foot_heights
-    
-    def _foot_world_positions(self):
-        """Get foot world positions from rigid body states"""
-        return self.rigid_body_states[:, self.feet_indices, :3]  # [E, F, 3]
-    
-    def _get_task_start_x(self):
-        """Get task start x coordinate for each environment"""
-        # This is a simplified implementation - you may need to adjust based on your terrain setup
-        # For now, assume task starts at x=0 relative to environment origin
-        if hasattr(self, 'env_origins'):
-            return self.env_origins[:, 0]  # Environment origins x coordinate
-        else:
+        points_x = [0, 0.15, 0.3, 0.45, 0.6, 0.75]  # measured_points_x 中前半部分
+        points_y = self.cfg.terrain.measured_points_y
+        Nx = len(points_x)
+        Ny = len(points_y)
+        if Nx * Ny != forward_heights.shape[1]:
+            print("Warning: measured_heights shape mismatch for _reward_safe_foot_placement")
             return torch.zeros(self.num_envs, device=self.device)
 
-    
+        heights_grid = forward_heights.view(self.num_envs, Nx, Ny)
 
-    
+        # 计算所有采样点下的粗糙度 (每个采样点的粗造度为周围四格高度的平方平均值)
+        diff_x = heights_grid[:, 1:, :] - heights_grid[:, :-1, :]
+        diff_y = heights_grid[:, :, 1:] - heights_grid[:, :, :-1]
+        diff_x_sq = diff_x * diff_x
+        diff_y_sq = diff_y * diff_y
+        roughness_acc = torch.zeros_like(heights_grid)
+        counts = torch.zeros_like(heights_grid)
+        roughness_acc[:, 1:, :] += diff_x_sq
+        roughness_acc[:, :-1, :] += diff_x_sq
+        counts[:, 1:, :] += 1
+        counts[:, :-1, :] += 1
+        roughness_acc[:, :, 1:] += diff_y_sq
+        roughness_acc[:, :, :-1] += diff_y_sq
+        counts[:, :, 1:] += 1
+        counts[:, :, :-1] += 1
+        roughness = roughness_acc / (counts + 1e-6)  # [E,Nx,Ny]
+
+        # 足端位置 (世界) -> 相对机体 -> 机体坐标系 (使用 base_quat 的逆旋转)
+        foot_world = self.rigid_body_states[:, self.feet_indices, :3]  # [E, F, 3]
+        base_world = self.root_states[:, :3].unsqueeze(1)              # [E,1,3]
+        foot_offset_world = foot_world - base_world                    # [E,F,3]
+        E, F, _ = foot_offset_world.shape
+        # 旋转到机体坐标
+        foot_offset_flat = foot_offset_world.view(E * F, 3)
+        base_quat_repeat = self.base_quat.repeat_interleave(F, dim=0)
+        # quat_rotate_inverse: (N,4),(N,3)->(N,3)
+        foot_body_flat = quat_rotate_inverse(base_quat_repeat, foot_offset_flat)
+        foot_body = foot_body_flat.view(E, F, 3)
+        foot_x = foot_body[..., 0]
+        foot_y = foot_body[..., 1]
+
+        # 构造张量形式的网格坐标 (假设 points_x/y 已按升序, 且对应 foot_body 坐标)
+        xs = torch.as_tensor(points_x, device=self.device, dtype=torch.float)
+        ys = torch.as_tensor(points_y, device=self.device, dtype=torch.float)
+
+        # 使用 bucketize 找到所在区间右边索引, 减 1 得到左侧格点索引
+        idx_x = torch.bucketize(foot_x, xs) - 1  # [E,F]
+        idx_y = torch.bucketize(foot_y, ys) - 1
+        idx_x = torch.clamp(idx_x, 0, Nx - 1).long()
+        idx_y = torch.clamp(idx_y, 0, Ny - 1).long()
+
+        # 取接触掩码 (contact_filt shape [E, n_feet])
+        if self.contact_filt.shape[1] != F:
+            # 若维度不符, 安全返回 0
+            return torch.zeros(self.num_envs, device=self.device)
+        contact_mask = self.contact_filt  # bool [E,F]
+
+        # 按索引采样粗糙度
+        env_ids_exp = torch.arange(self.num_envs, device=self.device).unsqueeze(1).expand(-1, F)
+        sampled_rough = roughness[env_ids_exp, idx_x, idx_y]  # [E,F]
+
+        # 仅对接触足统计
+        sampled_rough = torch.where(contact_mask, sampled_rough, torch.zeros_like(sampled_rough))
+        contact_counts = contact_mask.sum(dim=1).clamp(min=1)  # [E]
+        mean_rough = sampled_rough.sum(dim=1) / contact_counts  # [E]
+
+        # 转成奖励 (越平坦越好) beta 可调
+        beta = 10.0
+        reward = torch.exp(-beta * mean_rough)
+        # 若没有任何接触 (极端情况 contact_counts==0 原被 clamp), 此 reward=1; 可根据需要改成0
+        # 这里保持现状
+        return reward
+    def quat_to_rot_mat(self, quat):
+        """将四元数转换为旋转矩阵"""
+        qw, qx, qy, qz = quat[..., 0], quat[..., 1], quat[..., 2], quat[..., 3]
+        
+        # 计算旋转矩阵元素
+        r00 = 1 - 2 * (qy**2 + qz**2)
+        r01 = 2 * (qx*qy - qz*qw)
+        r02 = 2 * (qx*qz + qy*qw)
+        
+        r10 = 2 * (qx*qy + qz*qw)
+        r11 = 1 - 2 * (qx**2 + qz**2)
+        r12 = 2 * (qy*qz - qx*qw)
+        
+        r20 = 2 * (qx*qz - qy*qw)
+        r21 = 2 * (qy*qz + qx*qw)
+        r22 = 1 - 2 * (qx**2 + qy**2)
+        
+        rot_mat = torch.stack([r00, r01, r02, r10, r11, r12, r20, r21, r22], dim=-1)
+        return rot_mat.view(*quat.shape[:-1], 3, 3)
 

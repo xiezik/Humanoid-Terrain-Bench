@@ -29,28 +29,32 @@
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
 
 from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobotCfgPPO
+import numpy
 
 class N1FixCfg( LeggedRobotCfg ):
     class init_state( LeggedRobotCfg.init_state ):
-        pos = [0.0, 0.0, 0.90]  # x,y,z [m]
+        pos = [0.0, 0.0, 0.70]  # x,y,z [m]
         default_joint_angles = { # = target angles [rad] when action = 0.0
-            "left_hip_roll_joint": 0.,
-            "left_hip_yaw_joint": 0.,
-            "left_hip_pitch_joint": 0.,
-            "left_knee_pitch_joint": 0.,
-            "left_ankle_pitch_joint": 0.,
-            "left_ankle_roll_joint": 0.,
-            "right_hip_roll_joint": 0.,
-            "right_hip_yaw_joint": 0.,
-            "right_hip_pitch_joint": 0.,
-            "right_knee_pitch_joint": 0.,
-            "right_ankle_pitch_joint": 0.,
-            "right_ankle_roll_joint": 0.,
-            'torso_joint' : 0.
+            "left_hip_pitch_joint": -numpy.deg2rad(14.0),
+            "left_hip_roll_joint": 0.0,
+            "left_hip_yaw_joint": 0.0,
+            "left_knee_pitch_joint": +numpy.deg2rad(29.5),
+            "left_ankle_roll_joint": 0.0,
+            "left_ankle_pitch_joint": -numpy.deg2rad(13.7),
+
+            # right leg
+            "right_hip_pitch_joint": -numpy.deg2rad(14.0),
+            "right_hip_roll_joint": 0.0,
+            "right_hip_yaw_joint": 0.0,
+            "right_knee_pitch_joint": +numpy.deg2rad(29.5),
+            "right_ankle_roll_joint": 0.0,
+            "right_ankle_pitch_joint": -numpy.deg2rad(13.7),
+            
+            'torso_joint' : 0.02  
         }
 
     class env( LeggedRobotCfg.env ):
-        num_envs = 2048
+        num_envs = 1024
         n_scan = 132
         n_priv = 3 + 3 + 3 # = 9 base velocity 3个
 
@@ -71,17 +75,17 @@ class N1FixCfg( LeggedRobotCfg ):
         # PD Drive parameters:
         control_type = 'P'
         # PD Drive parameters:
-        stiffness = {'hip_yaw': 100,
-                     'hip_roll': 100,
-                     'hip_pitch': 100,
-                     'knee': 150,
-                     'ankle': 40,
+        stiffness = {'hip_yaw': 90,
+                     'hip_roll': 120,
+                     'hip_pitch': 180,
+                     'knee': 120,
+                     'ankle': 45,
                      }  # [N*m/rad]
-        damping = {  'hip_yaw': 2,
-                     'hip_roll': 2,
-                     'hip_pitch': 2,
-                     'knee': 4,
-                     'ankle': 2,
+        damping = {  'hip_yaw': 8,
+                     'hip_roll': 10,
+                     'hip_pitch': 10,
+                     'knee': 8,
+                     'ankle': 2.5,
                      }  # [N*m/rad]  # [N*m*s/rad]
         # action scale: target angle = actionScale * action + defaultAngle
         action_scale = 0.25
@@ -99,8 +103,20 @@ class N1FixCfg( LeggedRobotCfg ):
         flip_visual_attachments = False
 
     class commands( LeggedRobotCfg.commands ):
+        """运动命令配置"""
+        resampling_time = 1.0         # 命令重采样时间间隔（秒）
+        heading_command = True         # 启用朝向命令模式
+        ang_vel_clip = 0.1            # 角速度命令死区阈值
+        lin_vel_clip = 0.1            # 线速度命令死区阈值
+        
+        # 策略1：智能速度生成配置
+        height_adaptive_speed = False   # 启用基于高度的自适应速度
+        speed_complexity_weight = 0.4  # 地形复杂度权重
+        speed_gradient_weight = 0.4   # 高度梯度权重  
+        speed_roughness_weight = 0.2  # 地形粗糙度权重
+        
         class ranges( LeggedRobotCfg.commands.ranges ):
-            lin_vel_x = [0.1, 0.6]  # min max [m/s]
+            lin_vel_x = [0.1, 0.5]  # min max [m/s]
             lin_vel_y = [0.0, 0.0]   # min max [m/s]
             ang_vel_yaw = [0, 0]    # min max [rad/s]
             heading = [0, 0]
@@ -108,8 +124,8 @@ class N1FixCfg( LeggedRobotCfg ):
     class rewards:
         class scales:
             termination = -0.0
-            tracking_lin_vel = 1.0
-            tracking_ang_vel = 0.5
+            tracking_lin_vel = 2.0
+            tracking_ang_vel = 0.8
             lin_vel_z = -2.0
             ang_vel_xy = -0.05
             orientation = -0.
@@ -122,6 +138,8 @@ class N1FixCfg( LeggedRobotCfg ):
             feet_stumble = -0.0 
             action_rate = -0.01
             stand_still = -0.
+            
+            feet_distance = 2.5
 
         only_positive_rewards = True # if true negative total rewards are clipped at zero (avoids early termination problems)
         tracking_sigma = 0.25 # tracking reward = exp(-error^2/sigma)
@@ -132,13 +150,66 @@ class N1FixCfg( LeggedRobotCfg ):
         max_contact_force = 100. # forces above this value are penalized
         is_play = False
 
+    # class rewards:
+    #     class scales:
+    #         # termination = -0.0
+    #         tracking_lin_vel = 2.0
+    #         tracking_ang_vel = 1.0
+    #         # base_height = -10.0
+    #         orientation = -2.0
+    #         lin_vel_z = -2.0
+    #         ang_vel_xy = -0.05
+    #         torques = -0.00001
+    #         action_rate = -0.01
+    #         # smoothness = -1e-3
+    #         # stand_still = -0.05
+    #         # dof_vel = -1e-4
+    #         # dof_acc = -2.5e-8
+    #         # dof_pos_limits = -5.0
+    #         # dof_vel_limits = -1e-3
+    #         # dof_power = -2e-5
+    #         feet_ground_parallel = -0.5
+    #         feet_distance = -0.5
+    #         feet_air_time =  2.0
+    #         feet_clearance = -2.0 
+    #         # feet_forward_alignment = 2.0
+    #         feet_perpendicular_alignment = 3.0
+    #         # feet_parallel = -2.0
+
+    #         # alive = 0.15
+    #         # hip_pos = -1.0
+    #         # contact_no_vel = -0.2
+    #         # feet_swing_height = -20.0
+    #         # contact = 0.18
+    #         # feet_air_time =  0.0 
+    #         # collision = -0.
+            
+    #         reach_goal = 2.0
+    #         heading_tracking = 0.5
+    #         # next_heading_tracking = 0.5
+            
+
+    #     only_positive_rewards = False # if true negative total rewards are clipped at zero (avoids early termination problems)
+    #     tracking_sigma = 0.25 # tracking reward = exp(-error^2/sigma)
+    #     soft_dof_pos_limit = 1. # percentage of urdf limits, values above this limit are penalized
+    #     soft_dof_vel_limit = 1.
+    #     soft_torque_limit = 1.
+    #     feet_air_time_target = 0.5  # 目标腾空时间 (秒)
+    #     min_dist = 0.06  # 最小距离，用于feet_distance奖励计算
+    #     max_dist = 0.3
+    #     target_feet_height = 0.2  # 目标脚部高度，用于feet_clearance奖励计算
+    #     base_height_target = 0.75
+    #     max_contact_force = 300. # forces above this value are penalized
+    #     is_play = False
+
+
 class N1FixCfgPPO( LeggedRobotCfgPPO ):
     class algorithm( LeggedRobotCfgPPO.algorithm ):
         entropy_coef = 0.01
     class runner( LeggedRobotCfgPPO.runner ):
         run_name = ''
         experiment_name = 'n1_fix'
-        max_iterations = 50001 # number of policy updates
+        max_iterations = 100001 # number of policy updates
         save_interval = 500
 
     class estimator(LeggedRobotCfgPPO.estimator):

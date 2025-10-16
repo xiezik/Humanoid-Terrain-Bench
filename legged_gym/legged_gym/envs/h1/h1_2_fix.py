@@ -75,7 +75,7 @@ class H1_2FixCfg( LeggedRobotCfg ):
 
     class env( LeggedRobotCfg.env ):
         """环境配置参数"""
-        num_envs = 512         # 并行仿真环境数量（影响训练速度和内存使用）
+        num_envs = 1024         # 并行仿真环境数量（影响训练速度和内存使用）
         n_scan = 132            # 激光雷达扫描点数量
         n_priv = 3 + 3 + 3      # 特权信息维度：位置(3) + 速度(3) + 其他(3)
         n_priv_latent = 4 + 1 + 12 + 12  # 特权潜在状态维度
@@ -176,45 +176,105 @@ class H1_2FixCfg( LeggedRobotCfg ):
 
     class rewards:
         """奖励函数配置"""
-        class scales:
-            """各项奖励的权重系数 - 恢复原始设置"""
-            termination = -0.0          # 终止惩罚（设为0）
-            tracking_lin_vel = 1.5      # 原:1.0 → 新:1.5 (策略6：提高速度跟踪权重)
-            tracking_ang_vel = 0.8      # 原:0.5 → 新:0.8 (策略6：提高速度跟踪权重)
-            lin_vel_z = -2.0           # 垂直速度惩罚（避免跳跃）
-            ang_vel_xy = -0.05         # 恢复原始权重
-            orientation = -0.           # 恢复：不惩罚姿态
-            torques = -0.00001         # 恢复原始权重
-            dof_vel = -0.              # 恢复：不惩罚关节速度
-            dof_acc = -2.5e-7          # 关节加速度惩罚
-            action_rate = -0.01        # 动作变化率惩罚
-            collision = -1.0           # 碰撞惩罚
-            base_height = -0.          # 恢复：不惩罚基座高度
-            feet_air_time = 1.0        # 恢复原始权重
-            feet_stumble = -0.0        # 恢复：不惩罚绊倒
-            stand_still = -0.          # 恢复：不惩罚静止
+        # class scales:
+        #     """各项奖励的权重系数 - 恢复原始设置"""
+        #     termination = -0.0          # 终止惩罚（设为0）
+        #     tracking_lin_vel = 1.5      # 原:1.0 → 新:1.5 (策略6：提高速度跟踪权重)
+        #     tracking_ang_vel = 0.8      # 原:0.5 → 新:0.8 (策略6：提高速度跟踪权重)
+        #     lin_vel_z = -2.0           # 垂直速度惩罚（避免跳跃）
+        #     ang_vel_xy = -0.05         # 恢复原始权重
+        #     orientation = -0.           # 恢复：不惩罚姿态
+        #     # orientation_narrow = 1.2  # 细化姿态奖励
+        #     torques = -0.00001         # 恢复原始权重
+        #     dof_vel = -0.              # 恢复：不惩罚关节速度
+        #     dof_acc = -2.5e-7          # 关节加速度惩罚
+        #     action_rate = -0.01        # 动作变化率惩罚
+        #     collision = -1.0           # 碰撞惩罚
+        #     base_height = -0.          # 恢复：不惩罚基座高度
+        #     feet_air_time = 1.0        # 恢复原始权重
+        #     feet_stumble = -0.0        # 恢复：不惩罚绊倒
+        #     stand_still = -0.          # 恢复：不惩罚静止
             
-            reach_goal = 1.0           # 到达目标奖励
+        #     reach_goal = 1.25           # 到达目标奖励
 
-            # 新增 gap 相关奖励缩放参数
-            gap_success = 2.0          # 成功跨越间隙的奖励
-            gap_void_penalty = -5.0    # 踩空的惩罚
-            gap_progress = 1.0         # 跨越进度的奖励
-            gap_impact_penalty = -0.5  # 落地冲击的惩罚
+        #     # 新增 gap 相关奖励缩放参数
+        #     # gap_success = 1.5          # 成功跨越间隙的奖励
+        #     # gap_void_penalty = -5.0    # 踩空的惩罚
+        #     # gap_progress = 1.5         # 跨越进度的奖励
+        #     # gap_impact_penalty = -0.5  # 落地冲击的惩罚
             
-            # 新增 parkour 相关奖励缩放参数
-            # parkour_air_time = 2.0     # 腾空时间奖励
-            # parkour_symmetry = 1.0     # 对称性奖励
-            # parkour_orientation = -0.1 # 姿态奖励（惩罚）
-            # parkour_impulse = 0.2      # 蹬地力奖励
+        #     # 新增 parkour 相关奖励缩放参数
+        #     # parkour_air_time = 2.0     # 腾空时间奖励
+        #     # parkour_symmetry = 1.0     # 对称性奖励
+        #     # parkour_orientation = -0.1 # 姿态奖励（惩罚）
+        #     # parkour_impulse = 0.2      # 蹬地力奖励
+
+        # only_positive_rewards = True    # 只使用正奖励（避免早期终止问题）
+        # tracking_sigma = 0.25          # 跟踪奖励的标准差参数
+        # soft_dof_pos_limit = 1.        # 关节位置软限制（URDF限制的百分比）
+        # soft_dof_vel_limit = 1.        # 关节速度软限制
+        # soft_torque_limit = 1.         # 力矩软限制
+        # base_height_target = 1.        # 目标基座高度（米）
+        # max_contact_force = 100.       # 最大接触力（超过此值将被惩罚）
+        # is_play = False               # 非游戏模式
+
+        class scales:
+            """多地形通用模型奖励函数权重 - 针对多地形泛化优化"""
+            # === 核心任务奖励 ===
+            reach_goal = 3.0           # 增强目标到达奖励 (2.0→3.0)
+            heading_tracking = 1.5     # 增强朝向跟踪 (1.0→1.5)
+            tracking_lin_vel = 2.0     # 适度提高速度跟踪 (1.0→1.2)
+            tracking_ang_vel = 0.8     # 角速度跟踪 (1.0→0.8, 避免过度转弯)
+            
+            # === 稳定性与安全性 ===
+            orientation = -1.0         # 姿态稳定 (-1.25→-1.0, 适度放松)
+            lin_vel_z = -1.5          # 垂直速度惩罚 (-2.0→-1.5, 允许小幅跳跃适应地形)
+            ang_vel_xy = -0.03        # 滚转俯仰惩罚 (-0.025→-0.03)
+            feet_stumble = -2.0       # 绊倒惩罚 (-3.0→-2.0, 适度放松)
+            
+            # === 步态与接触管理 ===
+            feet_air_time = 2.0       # 空中时间奖励 (2.5→2.0)
+            safe_foot_placement = 1.2      # 增强落脚点选择 (0.8→1.2)
+            feet_contact_force = -3.0e-4  # 增强接触力控制 (-2.5e-4→-3.0e-4)
+            feet_slip = -0.15         # 防滑惩罚 (-0.25→-0.15, 适度放松)
+            feet_ground_parallel = -0.015  # 脚部平行惩罚 (-0.02→-0.015)
+            
+            # === 动作平滑性 ===
+            action_rate = -0.008      # 动作变化率 (-0.01→-0.008, 适度放松)
+            torques = -1.5e-6         # 力矩惩罚 (-2.5e-6→-1.5e-6)
+            
+            # === 关节限制 ===
+            dof_vel_limits = -0.08    # 关节速度限制 (-0.1→-0.08)
+            dof_pos_limits = -1.5     # 关节位置限制 (-2.0→-1.5)
+            
+            # === 新增多地形适应奖励 ===
+            # terrain_adaptation = 0.5   # 地形适应性奖励 (新增)
+            # energy_efficiency = -1.0e-5  # 能量效率 (新增)
+            # base_stability = 0.3      # 基座稳定性 (新增)
+            
+            # === 保留的重要奖励 ===
+            feet_distance = -1.5      # 脚间距离 (-2.0→-1.5)
+            feet_parallel = -1.5      # 脚部平行 (-2.0→-1.5)
+            no_fly = 0.2             # 防飞行 (0.25→0.2)
+            contact_momentum = -2.0e-4  # 接触动量 (-2.5e-4→-2.0e-4)
+            
+            # === 暂时禁用的奖励 ===
+            termination = -0.0        # 终止惩罚保持为0
+            # next_heading_tracking = 1.0  # 下一朝向跟踪 (可选择启用)
+            # bridge_center = 1.0         # 桥上居中奖励 (针对bridge地形)
+            # smoothness = -0.005         # 平滑性奖励 (可选择启用)
+
 
         only_positive_rewards = True    # 只使用正奖励（避免早期终止问题）
         tracking_sigma = 0.25          # 跟踪奖励的标准差参数
-        soft_dof_pos_limit = 1.        # 关节位置软限制（URDF限制的百分比）
-        soft_dof_vel_limit = 1.        # 关节速度软限制
-        soft_torque_limit = 1.         # 力矩软限制
+        soft_dof_pos_limit = 0.85        # 关节位置软限制（URDF限制的百分比）
+        soft_dof_vel_limit = 0.8        # 关节速度软限制
+        soft_torque_limit = 0.8         # 力矩软限制
+        min_dist = 0.05
+        max_dist = 0.35
         base_height_target = 1.        # 目标基座高度（米）
-        max_contact_force = 100.       # 最大接触力（超过此值将被惩罚）
+        feet_air_time_target = 0.5
+        max_contact_force = 550.       # 最大接触力（超过此值将被惩罚）
         is_play = False               # 非游戏模式
     
 
