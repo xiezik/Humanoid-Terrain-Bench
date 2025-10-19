@@ -41,6 +41,7 @@ import wandb
 import datetime
 
 from rsl_rl.algorithms import PPO
+from rsl_rl.algorithms import PPOMirror
 from rsl_rl.modules import *
 from rsl_rl.env import VecEnv
 import sys
@@ -409,6 +410,15 @@ class OnPolicyRunner:
                 value = torch.mean(infotensor)
                 wandb_dict['Episode_rew/' + key] = value
                 ep_string += f"""{f'Mean episode {key}:':>{pad}} {value:.4f}\n"""
+        
+        if hasattr(self.env, 'total_times') and hasattr(self.env, 'success_times') and hasattr(self.env, 'complete_times'):
+            if self.env.total_times > 0:
+                success_rate = self.env.success_times / self.env.total_times
+                completion_rate = self.env.complete_times / self.env.total_times
+                wandb_dict['Episode_rew/success_rate'] = success_rate
+                wandb_dict['Episode_rew/completion_rate'] = completion_rate
+                wandb_dict['Episode_rew/terrain_level'] = torch.mean(self.env.terrain_levels.float()) if hasattr(self.env, 'terrain_levels') else 0
+        
         mean_std = self.alg.actor_critic.std.mean()
         fps = int(self.num_steps_per_env * self.env.num_envs / (locs['collection_time'] + locs['learn_time']))
 

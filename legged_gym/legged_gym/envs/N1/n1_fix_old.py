@@ -128,13 +128,13 @@ class N1FixCfg( LeggedRobotCfg ):
     class rewards:
         class scales:
             # ========== 抬脚走路核心奖励 ==========
-            tracking_lin_vel = 15.0     # 【前进】极强鼓励跟踪速度命令
-            tracking_ang_vel = 8.0      # 【转向】鼓励转向 
-            feet_air_time = 20.0        # 【抬脚】极强鼓励抬脚走路
+            tracking_lin_vel = 10.0     # 【前进】极强鼓励跟踪速度命令
+            tracking_ang_vel = 3.0      # 【转向】鼓励转向
+            feet_air_time = 12.0        # 【抬脚】极强鼓励抬脚走路
             
             # ========== 姿态稳定性 ==========
             orientation = -0.5          # 【防倾倒】减少惩罚，允许更多探索
-            lin_vel_z = -0.5            # 【垂直稳定】减少惩罚
+            lin_vel_z = -1.0            # 【垂直稳定】减少惩罚
             ang_vel_xy = -0.02          # 【姿态稳定】减少惩罚
             
             # ========== 动作平滑性 ==========
@@ -142,35 +142,33 @@ class N1FixCfg( LeggedRobotCfg ):
             action_rate = -0.01         # 【平滑控制】惩罚动作剧烈变化
             
             # ========== 强制移动 ==========
-            stand_still = -10.0          # 【静止惩罚】强烈惩罚静止不动 -3
+            stand_still = -3.0          # 【静止惩罚】强烈惩罚静止不动
             
             # ========== 步态优化 ==========
-            feet_distance = 5.0         # 【步幅】鼓励合理脚间距
-            feet_clearance = -20.0       # 【脚部高度】轻微惩罚脚部过低  -3
+            feet_distance = 1.0         # 【步幅】鼓励合理脚间距
+            feet_clearance = -1.0       # 【脚部高度】轻微惩罚脚部过低
             feet_perpendicular_alignment = 5.0  # 【防外八】适度鼓励正确脚部方向
             
             # ========== 精细步态控制 ==========
-            # feet_distance_y_too_close = -2.0  # 【防脚太近】惩罚双脚太靠近
-            feet_speed_xy_close_to_ground = -5.0  # 【防脚拖地】惩罚脚部在地面滑动 -1
-            # limits_dof_pos_without_ankle = -0.5  # 【关节限制】惩罚关节超出限制
-            # limits_dof_vel_without_ankle = -0.3  # 【速度限制】惩罚关节速度过快
-            
-            base_height = -10.0          # 【基座高度】轻微惩罚基座高度
+            feet_distance_y_too_close = -2.0  # 【防脚太近】惩罚双脚太靠近
+            feet_speed_xy_close_to_ground = -1.0  # 【防脚拖地】惩罚脚部在地面滑动
+            limits_dof_pos_without_ankle = -0.5  # 【关节限制】惩罚关节超出限制
+            limits_dof_vel_without_ankle = -0.3  # 【速度限制】惩罚关节速度过快
             
             # ========== 导航任务 ==========
-            reach_goal = 15.0            # 【接近目标】鼓励接近目标 10
-            heading_tracking = 2.0      # 【朝向目标】鼓励朝向目标
-            next_heading_tracking = 1.0 # 【预瞄】鼓励预瞄下一个目标
+            reach_goal = 2.0            # 【接近目标】鼓励接近目标
+            heading_tracking = 0.5      # 【朝向目标】鼓励朝向目标
+            next_heading_tracking = 0.5 # 【预瞄】鼓励预瞄下一个目标
 
         only_positive_rewards = False # if true negative total rewards are clipped at zero (avoids early termination problems)
         tracking_sigma = 0.25 # tracking reward = exp(-error^2/sigma)
         soft_dof_pos_limit = 1. # percentage of urdf limits, values above this limit are penalized
         soft_dof_vel_limit = 1.
         soft_torque_limit = 1.
-        feet_air_time_target = 0.3  # 目标腾空时间 (秒) - 更短更容易达到     0.35
-        min_dist = 0.15  # 最小距离，用于feet_distance奖励计算
-        max_dist = 0.25
-        target_feet_height = 0.3  # 目标脚部高度，用于feet_clearance奖励计算 0.35
+        feet_air_time_target = 0.08  # 目标腾空时间 (秒) - 更短更容易达到
+        min_dist = 0.06  # 最小距离，用于feet_distance奖励计算
+        max_dist = 0.2
+        target_feet_height = 0.2  # 目标脚部高度，用于feet_clearance奖励计算
         base_height_target = 0.75
         max_contact_force = 300. # forces above this value are penalized
         

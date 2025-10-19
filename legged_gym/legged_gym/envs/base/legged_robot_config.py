@@ -48,7 +48,7 @@ class LeggedRobotCfg(BaseConfig):
         
     class env:
         """环境基础配置"""
-        num_envs = 6144  # 并行环境数量（默认值，通常会被具体配置覆盖）
+        num_envs = 1024  # 并行环境数量（默认值，通常会被具体配置覆盖）
 
         # 观测维度定义
         n_scan = 132              # 激光雷达扫描点数量
@@ -63,7 +63,7 @@ class LeggedRobotCfg(BaseConfig):
         num_actions = 12         # 动作维度（12个关节的目标角度）
         env_spacing = 3.         # 环境间距（米）- 在使用高度场/三角网格时不使用
         send_timeouts = True     # 是否向算法发送超时信息
-        episode_length_s = 20    # episode长度（秒）
+        episode_length_s = 40    # episode长度（秒）
         obs_type = "og"          # 观测类型
 
         # 编码相关
@@ -89,8 +89,8 @@ class LeggedRobotCfg(BaseConfig):
         contact_buf_len = 100         # 接触缓冲区长度
 
         # 目标相关配置
-        next_goal_threshold = 0.2     # 下一个目标的阈值距离
-        reach_goal_delay = 0.1        # 到达目标的延迟时间
+        next_goal_threshold = 0.3     # 下一个目标的阈值距离
+        reach_goal_delay = 0.05        # 到达目标的延迟时间
         num_future_goal_obs = 2       # 未来目标观测数量
 
     class depth:
@@ -146,14 +146,14 @@ class LeggedRobotCfg(BaseConfig):
 
     class commands:
         """运动命令配置"""
-        curriculum = True           # 是否启用课程学习
+        curriculum = False           # 是否启用课程学习
         max_curriculum = 1.         # 最大课程难度
         num_commands = 4            # 命令数量：lin_vel_x, lin_vel_y, ang_vel_yaw, heading
-        resampling_time = 1.        # 命令重新采样时间间隔（秒）
+        resampling_time = 6.        # 命令重新采样时间间隔（秒）
         heading_command = True      # 是否启用朝向命令（从朝向误差计算角速度命令）
         
-        lin_vel_clip = 0.1          # 线速度裁剪
-        ang_vel_clip = 0.2          # 角速度裁剪
+        lin_vel_clip = 0.2          # 线速度裁剪
+        ang_vel_clip = 0.4          # 角速度裁剪
         
         # 简单模式的命令范围
         class ranges:
@@ -200,7 +200,7 @@ class LeggedRobotCfg(BaseConfig):
         damping = {'joint_a': 1.0, 'joint_b': 1.5}     # 阻尼 [N*m*s/rad]
         
         # 动作缩放：目标角度 = actionScale * action + defaultAngle
-        action_scale = 0.5
+        action_scale = 0.25
         # 降采样：每个策略时间步内控制动作更新的次数 @ sim DT
         decimation = 4
 
@@ -254,31 +254,63 @@ class LeggedRobotCfg(BaseConfig):
         """奖励函数配置"""
         class scales:
             """各项奖励的权重系数"""
-            # 跟踪奖励
-            tracking_goal_vel = 1.5       # 目标速度跟踪奖励
-            tracking_yaw = 0.5            # 偏航跟踪奖励
             
             # 正则化奖励（通常为负值，起惩罚作用）
-            lin_vel_z = -1.0              # 垂直速度惩罚（避免跳跃）
-            ang_vel_xy = -0.05            # 滚转俯仰角速度惩罚（保持稳定）
-            orientation = -1.             # 姿态惩罚
-            dof_acc = -2.5e-7            # 关节加速度惩罚（平滑运动）
-            collision = -10.              # 碰撞惩罚
-            action_rate = -0.1            # 动作变化率惩罚（平滑控制）
-            delta_torques = -1.0e-7       # 力矩变化惩罚
-            torques = -0.00001           # 力矩大小惩罚（节能）
-            # hip_pos = -0.5             # 髋关节位置惩罚（注释掉）
-            dof_error = -0.04            # 关节误差惩罚
-            feet_stumble = -1            # 脚部绊倒惩罚
-            feet_edge = -1               # 脚部边缘惩罚
+            termination = -0.0
+            tracking_lin_vel = 1.0
+            tracking_ang_vel = 0.5
+            lin_vel_z = -2.0
+            ang_vel_xy = -0.05
+            orientation = -0.
+            torques = -0.00001
+            dof_vel = -0.
+            dof_acc = -2.5e-7
+            base_height = -0. 
+            feet_air_time =  1.0
+            collision = -1.
+            feet_stumble = -0.0 
+            action_rate = -0.01
+            stand_still = -0.
+            
+            # BEAMDOJO Foothold奖励
+            foothold = 1.0                   # Foothold奖励权重
+            
+        # BEAMDOJO双Critic奖励分离配置
+        dense_rewards = [
+            'tracking_lin_vel', 'tracking_ang_vel', 'orientation', 'base_height',
+            'lin_vel_z', 'ang_vel_xy', 'torques', 'action_rate', 'dof_vel', 
+            'dof_acc', 'feet_air_time', 'collision', 'feet_stumble', 'stand_still'
+        ]
+        sparse_rewards = [
+            'foothold'
+        ]
+        
+        # Foothold奖励配置
+        class foothold:
+            """Foothold奖励相关配置"""
+            num_sample_points = 4            # 每个脚掌采样点数量
+            sample_radius = 0.02             # 采样半径 [m]
+            height_tolerance = 0.05          # 高度容忍度 [m]
+            stability_weight = 1.0           # 稳定性权重
+            safety_weight = 0.5              # 安全性权重
             
         only_positive_rewards = True     # 如果为True，负总奖励被裁剪为零（避免早期终止问题）
-        tracking_sigma = 0.2            # 跟踪奖励 = exp(-error^2/sigma)
+        tracking_sigma = 0.25            # 跟踪奖励 = exp(-error^2/sigma)
         soft_dof_pos_limit = 1.         # URDF限制的百分比，超过此限制的值会被惩罚
         soft_dof_vel_limit = 1          # 关节速度软限制
-        soft_torque_limit = 0.4         # 力矩软限制
+        soft_torque_limit = 1.         # 力矩软限制
         base_height_target = 1.         # 目标基座高度 [m]
-        max_contact_force = 40.         # 最大接触力，超过此值会被惩罚 [N]
+        min_dist = 0.15  # 最小距离，用于feet_distance奖励计算
+        max_dist = 0.35  # 最大距离，用于feet_distance奖励计算
+        max_contact_force = 100.         # 最大接触力，超过此值会被惩罚 [N]
+        
+        # 论文中提到的奖励函数参数
+        target_feet_height = 0.1          # p^target_z: Target foot-lift height
+        target_feet_air_time = 0.5        # t^target_air: Desired feet air time
+        stand_still_threshold = 0.1       # ε: Threshold for determining zero-command in stand still reward
+        feet_distance_tracking_sigma = 0.25  # feet_distance奖励函数中的tracking sigma
+        contact_force_threshold = 1.0     # 脚部接触力阈值
+        stumble_force_threshold = 5.0     # feet_stumble中的力阈值
 
     # 观察者相机配置
     class viewer:
@@ -349,6 +381,12 @@ class LeggedRobotCfgPPO(BaseConfig):
         desired_kl = 0.01                 # 期望KL散度
         max_grad_norm = 1.                # 最大梯度范数
         
+        # BEAMDOJO双Critic配置
+        use_double_critic = False         # 是否使用双Critic网络
+        dense_value_loss_coef = 1.0       # 密集奖励价值损失系数
+        sparse_value_loss_coef = 1.0      # 稀疏奖励价值损失系数
+        advantage_merge_weight = 0.5      # 优势函数合并权重 (0.0=仅密集, 1.0=仅稀疏)
+        
         # DAgger参数
         dagger_update_freq = 20           # DAgger更新频率
         priv_reg_coef_schedual = [0, 0.1, 2000, 3000]        # 特权正则化系数调度
@@ -377,7 +415,7 @@ class LeggedRobotCfgPPO(BaseConfig):
         policy_class_name = 'ActorCritic'    # 策略类名
         algorithm_class_name = 'PPO'          # 算法类名
         num_steps_per_env = 24               # 每个环境每次迭代的步数
-        max_iterations = 50001               # 最大策略更新次数
+        max_iterations = 100001               # 最大策略更新次数
 
         # 日志记录
         save_interval = 100                  # 保存间隔（每多少次迭代检查一次保存）
@@ -389,3 +427,35 @@ class LeggedRobotCfgPPO(BaseConfig):
         load_run = -1                        # 要加载的运行（-1 = 最后一次运行）
         checkpoint = -1                      # 要加载的检查点（-1 = 最后保存的模型）
         resume_path = None                   # 恢复路径（从load_run和chkpt更新）
+
+    # BEAMDOJO两阶段训练配置
+    class training:
+        """两阶段训练配置"""
+        enable_two_stage = False             # 是否启用两阶段训练
+        
+        class stage1:
+            """Stage1软约束训练配置"""
+            min_steps = 1000000              # 最小训练步数
+            max_steps = 5000000              # 最大训练步数
+            success_threshold = 0.8          # 成功率阈值（达到此值可切换到Stage2）
+            terrain_type = "flat_with_target_perception"  # 地形类型
+            use_soft_termination = True      # 使用软终止（踩空不终止episode）
+            use_target_perception = True     # 使用目标地形感知
+            
+            # 命令范围（全方向）
+            class command_ranges:
+                lin_vel_x = [-1.0, 1.0]      # x方向线速度范围
+                lin_vel_y = [-1.0, 1.0]      # y方向线速度范围
+                ang_vel_yaw = [-1.0, 1.0]    # yaw角速度范围
+        
+        class stage2:
+            """Stage2硬约束训练配置"""
+            terrain_type = "sparse_terrain"  # 地形类型
+            use_soft_termination = False     # 使用硬终止（踩空立即终止）
+            use_target_perception = False    # 不使用目标地形感知
+            
+            # 命令范围（仅前进）
+            class command_ranges:
+                lin_vel_x = [-1.0, 1.0]      # x方向线速度范围
+                lin_vel_y = [0.0, 0.0]       # y方向线速度范围（固定为0）
+                ang_vel_yaw = [0.0, 0.0]     # yaw角速度范围（固定为0）

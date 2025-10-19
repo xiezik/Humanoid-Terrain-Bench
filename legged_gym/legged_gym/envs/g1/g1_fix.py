@@ -28,6 +28,7 @@
 #
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
 
+# align with unitree code
 from legged_gym.envs.base.legged_robot_config import LeggedRobotCfg, LeggedRobotCfgPPO
 
 class G1FixCfg( LeggedRobotCfg ):
@@ -50,7 +51,7 @@ class G1FixCfg( LeggedRobotCfg ):
         }
 
     class env( LeggedRobotCfg.env ):
-        num_envs = 2048
+        num_envs = 512
         n_scan = 132
         n_priv = 3 + 3 + 3 # = 9 base velocity 3个
         # n_priv_latent = 4 + 1 + 12 +12
@@ -98,48 +99,91 @@ class G1FixCfg( LeggedRobotCfg ):
         flip_visual_attachments = False
 
     class commands( LeggedRobotCfg.commands ):
+        """运动命令配置"""
+        resampling_time = 1.0         # 命令重采样时间间隔（秒）
+        heading_command = True         # 启用朝向命令模式
+        ang_vel_clip = 0.1            # 角速度命令死区阈值
+        lin_vel_clip = 0.1            # 线速度命令死区阈值
+        
+        # 策略1：智能速度生成配置
+        height_adaptive_speed = True   # 启用基于高度的自适应速度
+        speed_complexity_weight = 0.4  # 地形复杂度权重
+        speed_gradient_weight = 0.4   # 高度梯度权重  
+        speed_roughness_weight = 0.2  # 地形粗糙度权重
         class ranges( LeggedRobotCfg.commands.ranges ):
-            lin_vel_x = [0.1, 0.6]  # min max [m/s]
+            lin_vel_x = [0.1, 0.6] # min max [m/s]
             lin_vel_y = [0.0, 0.0]   # min max [m/s]
             ang_vel_yaw = [0, 0]    # min max [rad/s]
-            heading = [0, 0]
+            heading = [-1.2, 1.2]
 
-  
     class rewards:
         class scales:
-            termination = -0.0
-            tracking_lin_vel = 1.0
-            tracking_ang_vel = 0.5
-            lin_vel_z = -2.0
+            # termination = -0.0
+            tracking_lin_vel = 2.0
+            tracking_ang_vel = 1.0
+            # base_height = -10.0
+            orientation = -1.25
+            # lin_vel_z = -2.0
             ang_vel_xy = -0.05
-            orientation = -0.
-            torques = -0.00001
-            dof_vel = -0.
-            dof_acc = -2.5e-7
-            base_height = -0. 
-            feet_air_time =  1.0
-            collision = -1.
-            feet_stumble = -0.0 
+            torques = -2.5e-6
             action_rate = -0.01
-            stand_still = -0.
+            # smoothness = -1e-3
+            # stand_still = -0.05
+            dof_vel = -1e-4
+            dof_acc = -2.5e-8
+            dof_pos_limits = -5.0
+            dof_vel_limits = -1e-3
+            dof_power = -2e-5
+            feet_ground_parallel = -0.02
+            feet_distance = -2.0
+            feet_air_time =  2.5
+            feet_clearance = -1.0 
+            # feet_parallel = -2.0
+            feet_forward_alignment = 1.5
+            # alive = 0.15
+            # hip_pos = -1.0
+            # feet_swing_height = -20.0
+            # contact = 0.18
+            # collision = -0.
+            
+            reach_goal = 2.0
+            heading_tracking = 1.0
+            next_heading_tracking = 1.0
+            
 
-        only_positive_rewards = True # if true negative total rewards are clipped at zero (avoids early termination problems)
+        only_positive_rewards = False # if true negative total rewards are clipped at zero (avoids early termination problems)
         tracking_sigma = 0.25 # tracking reward = exp(-error^2/sigma)
         soft_dof_pos_limit = 1. # percentage of urdf limits, values above this limit are penalized
         soft_dof_vel_limit = 1.
         soft_torque_limit = 1.
-        base_height_target = 1.
+        feet_air_time_target = 0.25  # 目标腾空时间 (秒)
+        min_dist = 0.08  # 最小距离，用于feet_distance奖励计算
+        max_dist = 0.25  # 最大距离，用于feet_distance奖励计算
+        target_feet_height = 0.1  # 目标脚部高度，用于feet_clearance奖励计算
+        base_height_target = 0.7
         max_contact_force = 100. # forces above this value are penalized
         is_play = False
 
 class G1FixCfgPPO( LeggedRobotCfgPPO ):
     class algorithm( LeggedRobotCfgPPO.algorithm ):
+        value_loss_coef = 1.0
+        use_clipped_value_loss = True
+        clip_param = 0.2
         entropy_coef = 0.01
+        num_learning_epochs = 5
+        num_mini_batches = 4 # mini batch size = num_envs*nsteps / nminibatches
+        learning_rate = 1.e-3 #5.e-4
+        schedule = 'adaptive' # could be adaptive, fixed
+        gamma = 0.99
+        lam = 0.95
+        desired_kl = 0.01
+        max_grad_norm = 1.
+
     class runner( LeggedRobotCfgPPO.runner ):
         run_name = ''
         experiment_name = 'g1_fix'
-        max_iterations = 50001 # number of policy updates
-        save_interval = 500
+        max_iterations = 100001 # number of policy updates
+        save_interval = 200
 
     class estimator(LeggedRobotCfgPPO.estimator):
         train_with_estimated_states = True

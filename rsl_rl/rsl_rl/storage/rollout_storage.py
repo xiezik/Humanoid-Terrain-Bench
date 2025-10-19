@@ -46,6 +46,10 @@ class RolloutStorage:
             self.action_mean = None
             self.action_sigma = None
             self.hidden_states = None
+            # 双Critic相关
+            self.rewards_dense = None
+            self.rewards_sparse = None
+            self.values_sparse = None
         def clear(self):
             self.__init__()
 
@@ -75,6 +79,16 @@ class RolloutStorage:
         self.advantages = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
         self.mu = torch.zeros(num_transitions_per_env, num_envs, *actions_shape, device=self.device)
         self.sigma = torch.zeros(num_transitions_per_env, num_envs, *actions_shape, device=self.device)
+        
+        # 双Critic相关存储空间
+        self.rewards_dense = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
+        self.rewards_sparse = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
+        self.values_sparse = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
+        self.values_dense = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
+        self.returns_dense = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
+        self.returns_sparse = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
+        self.advantages_dense = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
+        self.advantages_sparse = torch.zeros(num_transitions_per_env, num_envs, 1, device=self.device)
 
         self.num_transitions_per_env = num_transitions_per_env
         self.num_envs = num_envs
@@ -97,6 +111,24 @@ class RolloutStorage:
         self.actions_log_prob[self.step].copy_(transition.actions_log_prob.view(-1, 1))
         self.mu[self.step].copy_(transition.action_mean)
         self.sigma[self.step].copy_(transition.action_sigma)
+        
+        # 双Critic相关数据
+        if hasattr(transition, 'rewards_dense') and transition.rewards_dense is not None:
+            self.rewards_dense[self.step].copy_(transition.rewards_dense.view(-1, 1))
+        else:
+            self.rewards_dense[self.step].copy_(transition.rewards.view(-1, 1))
+            
+        if hasattr(transition, 'rewards_sparse') and transition.rewards_sparse is not None:
+            self.rewards_sparse[self.step].copy_(transition.rewards_sparse.view(-1, 1))
+        else:
+            self.rewards_sparse[self.step].fill_(0.0)
+            
+        if hasattr(transition, 'values_sparse') and transition.values_sparse is not None:
+            self.values_sparse[self.step].copy_(transition.values_sparse)
+            self.values_dense[self.step].copy_(transition.values)  # 主values作为dense values
+        else:
+            self.values_dense[self.step].copy_(transition.values)
+            self.values_sparse[self.step].fill_(0.0)
 
         self._save_hidden_states(transition.hidden_states)
         self.step += 1
@@ -243,3 +275,118 @@ class RolloutStorage:
                        old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, (hid_a_batch, hid_c_batch), masks_batch
                 
                 first_traj = last_traj
+
+    def compute_returns_double(self, last_values1, last_values2, gamma, lam):
+        """
+        双Critic版本的returns和advantages计算
+        为密集奖励和稀疏奖励分别计算
+        """
+        # 为密集奖励计算returns和advantages
+        advantage1 = 0
+        self.returns_dense = torch.zeros_like(self.values)
+        self.advantages_dense = torch.zeros_like(self.values)
+        
+        # 为稀疏奖励计算returns和advantages  
+        advantage2 = 0
+        self.returns_sparse = torch.zeros_like(self.values)
+        self.advantages_sparse = torch.zeros_like(self.values)
+        
+        for step in reversed(range(self.num_transitions_per_env)):
+            if step == self.num_transitions_per_env - 1:
+                next_values1 = last_values1
+                next_values2 = last_values2
+            else:
+                next_values1 = self.values_dense[step + 1] if hasattr(self, 'values_dense') else self.values[step + 1]
+                next_values2 = self.values_sparse[step + 1] if hasattr(self, 'values_sparse') else torch.zeros_like(self.values[step + 1])
+            
+            next_is_not_terminal = 1.0 - self.dones[step].float()
+            
+            # 为密集奖励计算GAE
+            rewards_dense = self.rewards_dense[step] if hasattr(self, 'rewards_dense') else self.rewards[step]
+            values_dense = self.values_dense[step] if hasattr(self, 'values_dense') else self.values[step]
+            delta1 = rewards_dense + next_is_not_terminal * gamma * next_values1 - values_dense
+            advantage1 = delta1 + next_is_not_terminal * gamma * lam * advantage1
+            self.returns_dense[step] = advantage1 + values_dense
+            
+            # 为稀疏奖励计算GAE
+            rewards_sparse = self.rewards_sparse[step] if hasattr(self, 'rewards_sparse') else torch.zeros_like(self.rewards[step])
+            values_sparse = self.values_sparse[step] if hasattr(self, 'values_sparse') else torch.zeros_like(self.values[step])
+            delta2 = rewards_sparse + next_is_not_terminal * gamma * next_values2 - values_sparse
+            advantage2 = delta2 + next_is_not_terminal * gamma * lam * advantage2
+            self.returns_sparse[step] = advantage2 + values_sparse
+
+        # 计算advantages
+        self.advantages_dense = self.returns_dense - (self.values_dense if hasattr(self, 'values_dense') else self.values)
+        self.advantages_sparse = self.returns_sparse - (self.values_sparse if hasattr(self, 'values_sparse') else torch.zeros_like(self.values))
+        
+        # 归一化advantages
+        self.advantages_dense = (self.advantages_dense - self.advantages_dense.mean()) / (self.advantages_dense.std() + 1e-8)
+        self.advantages_sparse = (self.advantages_sparse - self.advantages_sparse.mean()) / (self.advantages_sparse.std() + 1e-8)
+        
+        # 为了向后兼容，也更新主要的advantages和returns
+        self.advantages = self.advantages_dense  # 主要使用密集奖励的advantages
+        self.returns = self.returns_dense
+
+    def mini_batch_generator_double(self, num_mini_batches, num_epochs=8):
+        """
+        双Critic版本的mini batch generator
+        """
+        batch_size = self.num_envs * self.num_transitions_per_env
+        mini_batch_size = batch_size // num_mini_batches
+        indices = torch.randperm(num_mini_batches*mini_batch_size, requires_grad=False, device=self.device)
+
+        observations = self.observations.flatten(0, 1)
+        
+        if self.privileged_observations is not None:
+            critic_observations = self.privileged_observations.flatten(0, 1)
+        else:
+            critic_observations = observations
+
+        actions = self.actions.flatten(0, 1)
+        values = self.values.flatten(0, 1)
+        values_dense = (self.values_dense if hasattr(self, 'values_dense') else self.values).flatten(0, 1)
+        values_sparse = (self.values_sparse if hasattr(self, 'values_sparse') else torch.zeros_like(self.values)).flatten(0, 1)
+        
+        returns = self.returns.flatten(0, 1)
+        returns_dense = self.returns_dense.flatten(0, 1)
+        returns_sparse = self.returns_sparse.flatten(0, 1)
+        
+        old_actions_log_prob = self.actions_log_prob.flatten(0, 1)
+        advantages = self.advantages.flatten(0, 1)
+        advantages_dense = self.advantages_dense.flatten(0, 1)
+        advantages_sparse = self.advantages_sparse.flatten(0, 1)
+        
+        old_mu = self.mu.flatten(0, 1)
+        old_sigma = self.sigma.flatten(0, 1)
+
+        for epoch in range(num_epochs):
+            for i in range(num_mini_batches):
+                start = i*mini_batch_size
+                end = (i+1)*mini_batch_size
+                batch_idx = indices[start:end]
+
+                obs_batch = observations[batch_idx]
+                critic_observations_batch = critic_observations[batch_idx]
+                actions_batch = actions[batch_idx]
+                target_values_batch = values[batch_idx]
+                target_values_dense_batch = values_dense[batch_idx]
+                target_values_sparse_batch = values_sparse[batch_idx]
+                
+                returns_batch = returns[batch_idx]
+                returns_dense_batch = returns_dense[batch_idx]
+                returns_sparse_batch = returns_sparse[batch_idx]
+                
+                old_actions_log_prob_batch = old_actions_log_prob[batch_idx]
+                advantages_batch = advantages[batch_idx]
+                advantages_dense_batch = advantages_dense[batch_idx]
+                advantages_sparse_batch = advantages_sparse[batch_idx]
+                
+                old_mu_batch = old_mu[batch_idx]
+                old_sigma_batch = old_sigma[batch_idx]
+
+                yield (obs_batch, critic_observations_batch, actions_batch, 
+                      target_values_batch, target_values_dense_batch, target_values_sparse_batch,
+                      advantages_batch, advantages_dense_batch, advantages_sparse_batch,
+                      returns_batch, returns_dense_batch, returns_sparse_batch,
+                      old_actions_log_prob_batch, old_mu_batch, old_sigma_batch, 
+                      (None, None), None)

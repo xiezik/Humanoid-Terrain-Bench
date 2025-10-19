@@ -305,6 +305,161 @@ class ActorCriticRMA(nn.Module):
         new_std = std * torch.ones(num_actions, device=device)
         self.std.data = new_std.data
 
+class ActorCriticRMADoubleReward(nn.Module):
+    """
+    BEAMDOJO双Critic网络架构 - 分离密集和稀疏奖励学习
+    """
+    is_recurrent = False
+    
+    def __init__(self,  num_prop,
+                        num_scan,
+                        num_critic_obs,
+                        num_priv_latent, 
+                        num_priv_explicit,
+                        num_hist,
+                        num_actions,
+                        scan_encoder_dims=[256, 256, 256],
+                        actor_hidden_dims=[256, 256, 256],
+                        critic_hidden_dims=[256, 256, 256],
+                        activation='elu',
+                        init_noise_std=1.0,
+                        use_double_critic=False,
+                        **kwargs):
+        if kwargs:
+            print("ActorCriticRMADoubleReward.__init__ got unexpected arguments, which will be ignored: " + str([key for key in kwargs.keys()]))
+        super(ActorCriticRMADoubleReward, self).__init__()
+
+        self.kwargs = kwargs
+        self.use_double_critic = use_double_critic
+        priv_encoder_dims= kwargs['priv_encoder_dims']
+        activation = get_activation(activation)
+        
+        # Actor网络（与原版保持一致）
+        self.actor = Actor(num_prop, num_scan, num_actions, scan_encoder_dims, 
+                          actor_hidden_dims, priv_encoder_dims, num_priv_latent, 
+                          num_priv_explicit, num_hist, activation, 
+                          tanh_encoder_output=kwargs['tanh_encoder_output'])
+        
+        # Critic网络
+        if use_double_critic:
+            # 双Critic - 一个处理密集奖励，一个处理稀疏奖励
+            critic1_layers = []  # 密集奖励Critic
+            critic1_layers.append(nn.Linear(num_critic_obs, critic_hidden_dims[0]))
+            critic1_layers.append(activation)
+            for l in range(len(critic_hidden_dims)):
+                if l == len(critic_hidden_dims) - 1:
+                    critic1_layers.append(nn.Linear(critic_hidden_dims[l], 1))
+                else:
+                    critic1_layers.append(nn.Linear(critic_hidden_dims[l], critic_hidden_dims[l + 1]))
+                    critic1_layers.append(activation)
+            self.critic1 = nn.Sequential(*critic1_layers)
+            
+            critic2_layers = []  # 稀疏奖励Critic
+            critic2_layers.append(nn.Linear(num_critic_obs, critic_hidden_dims[0]))
+            critic2_layers.append(activation)
+            for l in range(len(critic_hidden_dims)):
+                if l == len(critic_hidden_dims) - 1:
+                    critic2_layers.append(nn.Linear(critic_hidden_dims[l], 1))
+                else:
+                    critic2_layers.append(nn.Linear(critic_hidden_dims[l], critic_hidden_dims[l + 1]))
+                    critic2_layers.append(activation)
+            self.critic2 = nn.Sequential(*critic2_layers)
+            
+            print("Initialized DoubleCritic network")
+            print(f"Critic1 (Dense Rewards): {self.critic1}")
+            print(f"Critic2 (Sparse Rewards): {self.critic2}")
+        else:
+            # 单Critic（原版）
+            critic_layers = []
+            critic_layers.append(nn.Linear(num_critic_obs, critic_hidden_dims[0]))
+            critic_layers.append(activation)
+            for l in range(len(critic_hidden_dims)):
+                if l == len(critic_hidden_dims) - 1:
+                    critic_layers.append(nn.Linear(critic_hidden_dims[l], 1))
+                else:
+                    critic_layers.append(nn.Linear(critic_hidden_dims[l], critic_hidden_dims[l + 1]))
+                    critic_layers.append(activation)
+            self.critic = nn.Sequential(*critic_layers)
+
+        # Action noise
+        self.std = nn.Parameter(init_noise_std * torch.ones(num_actions))
+        self.distribution = None
+        # disable args validation for speedup
+        Normal.set_default_validate_args = False
+    
+    @staticmethod
+    def init_weights(sequential, scales):
+        [torch.nn.init.orthogonal_(module.weight, gain=scales[idx]) for idx, module in
+         enumerate(mod for mod in sequential if isinstance(mod, nn.Linear))]
+
+    def reset(self, dones=None):
+        pass
+
+    def forward(self):
+        raise NotImplementedError
+    
+    @property
+    def action_mean(self):
+        return self.distribution.mean
+
+    @property
+    def action_std(self):
+        return self.distribution.stddev
+    
+    @property
+    def entropy(self):
+        return self.distribution.entropy().sum(dim=-1)
+
+    def update_distribution(self, observations, hist_encoding):
+        mean = self.actor(observations, hist_encoding)
+        self.distribution = Normal(mean, mean*0. + self.std)
+
+    def act(self, observations, hist_encoding=False, **kwargs):
+        self.update_distribution(observations, hist_encoding)
+        return self.distribution.sample()
+    
+    def get_actions_log_prob(self, actions):
+        return self.distribution.log_prob(actions).sum(dim=-1)
+
+    def act_inference(self, observations, hist_encoding=False, eval=False, scandots_latent=None, **kwargs):
+        if not eval:
+            actions_mean = self.actor(observations, hist_encoding, eval, scandots_latent)
+            return actions_mean
+        else:
+            actions_mean, latent_hist, latent_priv = self.actor(observations, hist_encoding, eval=True)
+            return actions_mean, latent_hist, latent_priv
+
+    def evaluate(self, critic_observations, **kwargs):
+        """评估状态价值"""
+        if self.use_double_critic:
+            # 返回两个价值
+            value1 = self.critic1(critic_observations)
+            value2 = self.critic2(critic_observations)
+            return value1, value2
+        else:
+            # 单一价值（兼容原版）
+            value = self.critic(critic_observations)
+            return value
+    
+    def evaluate_critic1(self, critic_observations):
+        """评估密集奖励价值"""
+        if self.use_double_critic:
+            return self.critic1(critic_observations)
+        else:
+            raise RuntimeError("evaluate_critic1 called but use_double_critic=False")
+    
+    def evaluate_critic2(self, critic_observations):
+        """评估稀疏奖励价值"""
+        if self.use_double_critic:
+            return self.critic2(critic_observations)
+        else:
+            raise RuntimeError("evaluate_critic2 called but use_double_critic=False")
+    
+    def reset_std(self, std, num_actions, device):
+        new_std = std * torch.ones(num_actions, device=device)
+        self.std.data = new_std.data
+
+
 def get_activation(act_name):
     if act_name == "elu":
         return nn.ELU()

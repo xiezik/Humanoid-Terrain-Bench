@@ -29,3 +29,5 @@
 # Copyright (c) 2021 ETH Zurich, Nikita Rudin
 
 from .ppo import PPO
+from .mirror import Mirror
+from .ppo_mirror import PPOMirror
