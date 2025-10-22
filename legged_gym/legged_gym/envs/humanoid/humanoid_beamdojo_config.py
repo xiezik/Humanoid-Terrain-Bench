@@ -63,6 +63,13 @@ class HumanoidBEAMDOJOCfg(LeggedRobotCfg):
             ang_vel_yaw = [-1.0, 1.0] # yaw角速度 [rad/s]
             heading = [-3.14, 3.14]
             
+        # 最大命令范围（必需的属性）
+        class max_ranges:
+            lin_vel_x = [-1.0, 1.0]   # x方向线速度 [m/s]
+            lin_vel_y = [-1.0, 1.0]   # y方向线速度 [m/s]
+            ang_vel_yaw = [-1.0, 1.0] # yaw角速度 [rad/s]
+            heading = [-3.14, 3.14]
+            
     class rewards(LeggedRobotCfg.rewards):
         """BEAMDOJO奖励配置"""
         class scales:

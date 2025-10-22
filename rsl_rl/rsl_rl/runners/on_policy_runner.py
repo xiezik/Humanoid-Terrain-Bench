@@ -42,6 +42,11 @@ import datetime
 
 from rsl_rl.algorithms import PPO
 from rsl_rl.algorithms import PPOMirror
+# 导入BEAMDOJO双Critic算法
+try:
+    from rsl_rl.algorithms.ppo_double_reward import PPODoubleReward
+except ImportError:
+    PPODoubleReward = None
 from rsl_rl.modules import *
 from rsl_rl.env import VecEnv
 import sys
@@ -66,14 +71,25 @@ class OnPolicyRunner:
         self.env = env
 
         print("Using MLP and Priviliged Env encoder ActorCritic structure")
-        actor_critic: ActorCriticRMA = ActorCriticRMA(self.env.cfg.env.n_proprio,
-                                                      self.env.cfg.env.n_scan,
-                                                      self.env.num_obs,
-                                                      self.env.cfg.env.n_priv_latent,
-                                                      self.env.cfg.env.n_priv,
-                                                      self.env.cfg.env.history_len,
-                                                      self.env.num_actions,
-                                                      **self.policy_cfg).to(self.device)
+        
+        # 动态选择policy类
+        policy_class_name = self.cfg.get("policy_class_name", "ActorCriticRMA")
+        if policy_class_name == "ActorCriticRMADoubleReward":
+            from rsl_rl.modules.actor_critic import ActorCriticRMADoubleReward
+            actor_critic_class = ActorCriticRMADoubleReward
+            print(f"Using {policy_class_name} for BEAMDOJO double critic")
+        else:
+            actor_critic_class = ActorCriticRMA
+            print(f"Using default {policy_class_name}")
+            
+        actor_critic = actor_critic_class(self.env.cfg.env.n_proprio,
+                                          self.env.cfg.env.n_scan,
+                                          self.env.num_obs,
+                                          self.env.cfg.env.n_priv_latent,
+                                          self.env.cfg.env.n_priv,
+                                          self.env.cfg.env.history_len,
+                                          self.env.num_actions,
+                                          **self.policy_cfg).to(self.device)
         estimator = Estimator(input_dim=env.cfg.env.n_proprio, output_dim=env.cfg.env.n_priv, hidden_dims=self.estimator_cfg["hidden_dims"]).to(self.device)
         # Depth encoder
         self.if_depth = self.depth_encoder_cfg["if_depth"]
@@ -196,7 +212,17 @@ class OnPolicyRunner:
                 start = stop
                 self.alg.compute_returns(critic_obs)
             
-            mean_value_loss, mean_surrogate_loss, mean_estimator_loss, mean_disc_loss, mean_disc_acc, mean_priv_reg_loss, priv_reg_coef = self.alg.update()
+            # Learning step - 适配不同的算法返回值
+            if hasattr(self.alg, 'use_double_critic') and self.alg.use_double_critic:
+                # PPODoubleReward返回5个值
+                mean_value_loss, mean_surrogate_loss, mean_priv_reg_loss, mean_value_loss_dense, mean_value_loss_sparse = self.alg.update()
+                mean_estimator_loss = 0.0  # 设置默认值
+                mean_disc_loss = 0.0       # 设置默认值
+                mean_disc_acc = 0.0        # 设置默认值
+                priv_reg_coef = 0.0        # 设置默认值
+            else:
+                # 标准PPO返回7个值
+                mean_value_loss, mean_surrogate_loss, mean_estimator_loss, mean_disc_loss, mean_disc_acc, mean_priv_reg_loss, priv_reg_coef = self.alg.update()
             if hist_encoding:
                 print("Updating dagger...")
                 mean_hist_latent_loss = self.alg.update_dagger()
