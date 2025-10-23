@@ -256,24 +256,24 @@ class LeggedRobotCfg(BaseConfig):
             """各项奖励的权重系数"""
             
             # 正则化奖励（通常为负值，起惩罚作用）
-            termination = -0.0
-            tracking_lin_vel = 1.0
-            tracking_ang_vel = 0.5
-            lin_vel_z = -2.0
-            ang_vel_xy = -0.05
-            orientation = -0.
-            torques = -0.00001
-            dof_vel = -0.
-            dof_acc = -2.5e-7
-            base_height = -0. 
-            feet_air_time =  1.0
-            collision = -1.
-            feet_stumble = -0.0 
-            action_rate = -0.01
-            stand_still = -0.
+            # termination = -0.0
+            # tracking_lin_vel = 1.0
+            # tracking_ang_vel = 0.5
+            # lin_vel_z = -2.0
+            # ang_vel_xy = -0.05
+            # orientation = -0.
+            # torques = -0.00001
+            # dof_vel = -0.
+            # dof_acc = -2.5e-7
+            # base_height = -0. 
+            # feet_air_time =  1.0
+            # collision = -1.
+            # feet_stumble = -0.0 
+            # action_rate = -0.01
+            # stand_still = -0.
             
             # BEAMDOJO Foothold奖励
-            foothold = 1.0                   # Foothold奖励权重
+            # foothold = 1.0                   # Foothold奖励权重
             
         # BEAMDOJO双Critic奖励分离配置
         dense_rewards = [
@@ -303,6 +303,7 @@ class LeggedRobotCfg(BaseConfig):
         min_dist = 0.15  # 最小距离，用于feet_distance奖励计算
         max_dist = 0.35  # 最大距离，用于feet_distance奖励计算
         max_contact_force = 100.         # 最大接触力，超过此值会被惩罚 [N]
+        is_play = False                  # 是否为播放模式
         
         # 论文中提到的奖励函数参数
         target_feet_height = 0.1          # p^target_z: Target foot-lift height

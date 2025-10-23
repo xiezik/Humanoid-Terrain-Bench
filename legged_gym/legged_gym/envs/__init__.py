@@ -43,15 +43,15 @@ from .humanoid.humanoid_beamdojo_config import (
     HumanoidBEAMDOJOFullCfgPPO
 )
 
-# BEAMDOJO G1 configurations
-from .humanoid.humanoid_beamdojo_g1_config import (
-    HumanoidBEAMDOJOG1Cfg,
-    HumanoidBEAMDOJOG1CfgPPO,
-    HumanoidBEAMDOJOG1FullCfg,
-    HumanoidBEAMDOJOG1FullCfgPPO,
-    HumanoidBEAMDOJOG1Stage1Cfg,
-    HumanoidBEAMDOJOG1Stage1CfgPPO
-)
+# BEAMDOJO G1 configurations  
+# from .humanoid.humanoid_beamdojo_g1_config import (
+#     HumanoidBEAMDOJOG1Cfg,
+#     HumanoidBEAMDOJOG1CfgPPO,
+#     HumanoidBEAMDOJOG1FullCfg,
+#     HumanoidBEAMDOJOG1FullCfgPPO,
+#     HumanoidBEAMDOJOG1Stage1Cfg,
+#     HumanoidBEAMDOJOG1Stage1CfgPPO
+# )
 
 import os
 
@@ -65,8 +65,3 @@ task_registry.register("n1", HumanoidRobot, N1FixCfg(), N1FixCfgPPO())
 # Register BEAMDOJO tasks
 task_registry.register("humanoid_beamdojo", HumanoidRobot, HumanoidBEAMDOJOCfg(), HumanoidBEAMDOJOCfgPPO())
 task_registry.register("humanoid_beamdojo_full", HumanoidRobot, HumanoidBEAMDOJOFullCfg(), HumanoidBEAMDOJOFullCfgPPO())
-
-# Register BEAMDOJO G1 tasks
-task_registry.register("humanoid_beamdojo_g1", HumanoidRobot, HumanoidBEAMDOJOG1Cfg(), HumanoidBEAMDOJOG1CfgPPO())
-task_registry.register("humanoid_beamdojo_g1_full", HumanoidRobot, HumanoidBEAMDOJOG1FullCfg(), HumanoidBEAMDOJOG1FullCfgPPO())
-task_registry.register("humanoid_beamdojo_g1_stage1", HumanoidRobot, HumanoidBEAMDOJOG1Stage1Cfg(), HumanoidBEAMDOJOG1Stage1CfgPPO())

@@ -55,6 +55,14 @@ def create_stage1_args():
     parser.add_argument('--save_freq', type=int, default=100,
                        help='模型保存频率')
     
+    # Wandb参数（与train.py保持一致）
+    parser.add_argument('--proj_name', type=str, default='beamdojo_stage1',
+                       help='wandb项目名称')
+    parser.add_argument('--debug', action='store_true', default=False,
+                       help='调试模式（禁用wandb，减少环境数）')
+    parser.add_argument('--no_wandb', action='store_true', default=False,
+                       help='禁用wandb记录')
+    
     return parser.parse_args()
 
 def main():
@@ -70,6 +78,9 @@ def main():
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         args.experiment_name = f"beamdojo_stage1_{timestamp}"
     
+    # 设置实验ID用于wandb
+    args.exptid = args.experiment_name
+    
     print(f"📋 训练配置:")
     print(f"   任务: {args.task}")
     print(f"   实验名称: {args.experiment_name}")
@@ -79,6 +90,48 @@ def main():
     print(f"   无头模式: {args.headless}")
     
     try:
+        # Wandb初始化 - 完全按照train.py的方式
+        import wandb
+        
+        # 设置wandb模式
+        if args.debug:
+            mode = "disabled"
+            args.rows = 10
+            args.cols = 8
+            args.num_envs = 64
+        else:
+            mode = "online"
+        
+        if args.no_wandb:
+            mode = "disabled"
+        
+        # 创建日志路径
+        from legged_gym import LEGGED_GYM_ROOT_DIR
+        log_pth = LEGGED_GYM_ROOT_DIR + "/logs/{}/".format(args.proj_name) + \
+                  datetime.now().strftime('%b%d_%H-%M-%S--') + args.exptid
+        
+        try:
+            os.makedirs(log_pth)
+        except:
+            pass
+            
+        # 初始化wandb
+        wandb.init(project=args.proj_name, name=args.exptid, group=args.exptid[:3], mode=mode, dir="../../logs")
+        
+        # 保存重要文件到wandb
+        from legged_gym import LEGGED_GYM_ENVS_DIR
+        wandb.save(LEGGED_GYM_ENVS_DIR + "/base/legged_robot_config.py", policy="now")
+        wandb.save(LEGGED_GYM_ENVS_DIR + "/base/legged_robot.py", policy="now")
+        
+        # 保存BEAMDOJO配置文件
+        try:
+            wandb.save(LEGGED_GYM_ENVS_DIR + "/humanoid/humanoid_beamdojo_config.py", policy="now")
+            print(f"✅ BEAMDOJO配置文件已保存到wandb")
+        except:
+            pass
+        
+        print(f"✅ Wandb初始化成功: {mode}模式，项目: {args.proj_name}")
+        
         # 动态导入训练模块
         from rsl_rl.runners import OnPolicyRunner
         
