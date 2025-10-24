@@ -64,24 +64,55 @@ class HumanoidBEAMDOJOCfg(LeggedRobotCfg):
         action_scale = 0.25
         # decimation: Number of control action updates @ sim DT per policy DT
         decimation = 4    
-    class terrain:
-        """地形配置 - 支持两阶段训练"""
-        mesh_type = 'trimesh'
-        horizontal_scale = 0.1
-        vertical_scale = 0.005
-        border_size = 25
-        curriculum = True
-        static_friction = 1.0
-        dynamic_friction = 1.0
-        restitution = 0.
+    # class terrain:
+    #     """地形配置 - 支持两阶段训练"""
+    #     mesh_type = 'trimesh'
+    #     horizontal_scale = 0.1
+    #     vertical_scale = 0.005
+    #     border_size = 25
+    #     curriculum = True
+    #     static_friction = 1.0
+    #     dynamic_friction = 1.0
+    #     restitution = 0.
         
-        # 地形类型配置
-        terrain_types = ["flat", "rough", "stairs", "obstacles"]
-        terrain_proportions = [0.3, 0.3, 0.2, 0.2]
+    #     # 地形类型配置
+    #     terrain_types = ["flat", "rough", "stairs", "obstacles"]
+    #     terrain_proportions = [0.3, 0.3, 0.2, 0.2]
         
-        # 支持两阶段地形切换
-        stage1_terrain_types = ["flat"]  # Stage1仅使用平坦地形
-        stage2_terrain_types = ["rough", "stairs", "obstacles"]  # Stage2使用复杂地形
+    #     # 支持两阶段地形切换
+    #     stage1_terrain_types = ["flat"]  # Stage1仅使用平坦地形
+    #     stage2_terrain_types = ["rough", "stairs", "obstacles"]  # Stage2使用复杂地形
+    
+    
+    class domain_rand(LeggedRobotCfg.domain_rand):
+        randomize_friction = True            # 随机化摩擦系数
+        friction_range = [0.8, 0.8]         # 恢复原始摩擦系数
+        randomize_base_mass = True          # 随机化质量
+        added_mass_range = [-2.0, 2.0]      # 负载质量 U(-2.0, 2.0) kg
+        randomize_base_com = True           # 随机化质心位置
+        added_com_range = [-0.05, 0.05]     # 质心偏移 U(-0.05, 0.05) m
+        push_robots = True                   # 启用外部推力（抗干扰训练）
+        push_interval_s = 8                  # 推力间隔：每8秒推一次
+        max_push_vel_xy = 0.5                # 最大推力速度：±0.5 m/s
+
+        randomize_motor = True              # 随机化电机特性
+        motor_strength_range = [0.9, 1.1]   # 电机强度噪声 U(0.9, 1.1)
+        
+        randomize_actuator_offset = True    # 随机化执行器零位偏移
+        actuator_offset_range = [-0.05, 0.05]  # 执行器偏移 U(-0.05, 0.05) rad
+        
+        randomize_pd_gains = True           # 随机化PD增益
+        pd_gain_range = [0.85, 1.15]        # Kp/Kd噪声因子 U(0.85, 1.15)
+
+        # 动作延迟相关参数（BeamDojo域随机化）
+        delay_update_global_steps = 24 * 8000  # 延迟更新的全局步数
+        action_delay = True                  # 启用动作延迟（抗干扰训练）
+        action_curr_step = [1, 1, 2]        # 课程学习：保守渐进（20ms→20ms→40ms）
+        action_curr_step_scratch = [0, 1, 1] # 从头训练时的延迟步数（0ms→20ms→20ms）
+        action_delay_view = 1               # 动作延迟视图
+        action_buf_len = 8                  # 动作缓冲区长度
+
+    
     class asset( LeggedRobotCfg.asset ):
         file = '{LEGGED_GYM_ROOT_DIR}/resources/robots/g1/g1_12dof_with_hand.urdf'
         name = "g1_fix_upper"
