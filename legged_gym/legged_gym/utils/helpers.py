@@ -101,6 +101,14 @@ def parse_sim_params(args, cfg):
     return sim_params
 
 def get_load_path(root, load_run=-1, checkpoint=-1, model_name_include="model"):
+    # 🔄 处理跨项目checkpoint加载 - 如果load_run是绝对路径，直接使用
+    if load_run != -1 and isinstance(load_run, str) and os.path.isabs(load_run):
+        if os.path.isdir(load_run):
+            print(f"🔄 使用绝对路径作为加载目录: {load_run}")
+            root = load_run
+        else:
+            print(f"⚠️ 绝对路径不存在: {load_run}")
+    
     if not os.path.isdir(root):  # use first 4 chars to mactch the run name
         model_name_cand = os.path.basename(root)
         model_parent = os.path.dirname(root)

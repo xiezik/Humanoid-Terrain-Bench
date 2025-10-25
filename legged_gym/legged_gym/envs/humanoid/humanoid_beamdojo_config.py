@@ -28,7 +28,7 @@ class HumanoidBEAMDOJOCfg(LeggedRobotCfg):
 
     class env(LeggedRobotCfg.env):
         """环境配置"""
-        num_envs = 1024
+        num_envs = 2048
         episode_length_s = 40
         
         # 观测配置（根据实际humanoid机器人调整）

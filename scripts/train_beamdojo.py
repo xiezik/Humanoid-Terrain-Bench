@@ -151,7 +151,32 @@ def train_beamdojo(args):
     # 设置BEAMDOJO配置
     env_cfg, _ = setup_beamdojo_config(args, env_cfg, task_registry.get_cfgs(name=args.task)[1])
     
-    # 创建算法runner (使用task_registry的标准方式)
+    # 🔄 处理resume_path参数 - 在make_alg_runner之前
+    if hasattr(args, 'resume_path') and args.resume_path:
+        print(f"   📂 检测到resume_path参数: {args.resume_path}")
+        if os.path.exists(args.resume_path):
+            # 将resume_path转换为标准的resume参数
+            args.resume = True
+            # 从路径中提取run名称和checkpoint号
+            path_parts = args.resume_path.split('/')
+            for i, part in enumerate(path_parts):
+                if 'logs' in part and i + 2 < len(path_parts):
+                    args.load_run = path_parts[i + 2]  # run目录名
+                    break
+            
+            # 从文件名提取checkpoint号
+            filename = os.path.basename(args.resume_path)
+            if filename.startswith('model_') and filename.endswith('.pt'):
+                try:
+                    args.checkpoint = int(filename.replace('model_', '').replace('.pt', ''))
+                    print(f"   ✓ 自动设置: --load_run {args.load_run} --checkpoint {args.checkpoint}")
+                except ValueError:
+                    print(f"   ⚠️ 无法从文件名解析checkpoint号: {filename}")
+        else:
+            print(f"   ❌ Checkpoint文件不存在: {args.resume_path}")
+            args.resume_path = None
+    
+    # 创建算法runner (使用task_registry的标准方式，这里会自动处理checkpoint加载)
     ppo_runner, train_cfg = task_registry.make_alg_runner(
         log_root=log_pth, env=env, name=args.task, args=args)
     
@@ -159,7 +184,15 @@ def train_beamdojo(args):
     print(f"   🎯 任务: {args.task}")
     print(f"   🔢 迭代数: {train_cfg.runner.max_iterations}")
     print(f"   🌍 环境数: {env_cfg.env.num_envs}")
-    print(f"   💾 日志路径: {log_pth}")
+    print(f"   � 日志路径: {log_pth}")
+    
+    # 检查是否有checkpoint恢复参数
+    if args.resume:
+        print(f"   📂 Resume模式: 启用")
+        if hasattr(args, 'load_run') and args.load_run:
+            print(f"   📁 Load run: {args.load_run}")
+        if hasattr(args, 'checkpoint') and args.checkpoint != -1:
+            print(f"   🔢 Checkpoint: {args.checkpoint}")
     
     # 开始训练 (完全按照legged_gym的方式)
     ppo_runner.learn(num_learning_iterations=train_cfg.runner.max_iterations, 
@@ -171,7 +204,7 @@ def train_beamdojo(args):
 def get_beamdojo_args():
     """扩展legged_gym的get_args，添加BEAMDOJO专用参数"""
     
-    # 先获取标准参数
+    # 先获取标准参数 (包含resume, load_run, checkpoint等)
     args = get_args()
     
     # 添加BEAMDOJO专用属性
@@ -181,17 +214,29 @@ def get_beamdojo_args():
         args.use_double_critic = False  
     if not hasattr(args, 'enable_beamdojo'):
         args.enable_beamdojo = False
-    if not hasattr(args, 'proj_name'):
-        args.proj_name = 'beamdojo'
     
-    # 添加wandb相关参数（与train.py保持一致）
-    if not hasattr(args, 'debug'):
-        args.debug = False
-    if not hasattr(args, 'no_wandb'):
-        args.no_wandb = False
-    if not hasattr(args, 'exptid'):
-        args.exptid = f"{args.task}_{datetime.now().strftime('%m%d_%H%M')}"
-        
+    # 处理跨项目的load_run路径
+    if hasattr(args, 'load_run') and args.load_run and args.load_run != -1:
+        # 如果load_run包含完整路径信息（比如 "beamdojo_test/Oct23_23-57-35--humanoid_beamdojo_full_1023_2357"）
+        if '/' in str(args.load_run):
+            parts = str(args.load_run).split('/')
+            if len(parts) >= 2:
+                source_proj = parts[0]  # beamdojo_test
+                run_dir = parts[1]      # Oct23_23-57-35--humanoid_beamdojo_full_1023_2357
+                
+                # 构建完整的源路径
+                from legged_gym import LEGGED_GYM_ROOT_DIR
+                source_path = f"{LEGGED_GYM_ROOT_DIR}/logs/{source_proj}/{run_dir}"
+                
+                if os.path.exists(source_path):
+                    print(f"🔄 检测到跨项目checkpoint加载:")
+                    print(f"   源项目: {source_proj}")
+                    print(f"   源运行: {run_dir}")
+                    args.load_run = source_path  # 直接使用完整路径
+                else:
+                    print(f"❌ 源路径不存在: {source_path}")
+                    args.load_run = -1
+                    
     return args
 
 if __name__ == '__main__':
